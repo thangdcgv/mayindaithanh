@@ -884,141 +884,141 @@ elif menu == "⚙️ Quản trị hệ thống":
                             except Exception as e:
                                 st.error(f"Lỗi: {e}")
 
-    # --- TAB 2: QUẢN TRỊ TÀI KHOẢN (Chỉ dành cho System Admin) ---
-if "🛠️ Quản trị tài khoản" in list_tabs:
-    idx = list_tabs.index("🛠️ Quản trị tài khoản")
-    with tabs[idx]:
-        
-        # --- MỤC 1: QUẢN LÝ CHỨC DANH ---
-        with st.expander("📂 Quản lý danh mục Chức danh"):
-            if "list_chuc_danh" not in st.session_state:
-                st.session_state["list_chuc_danh"] = ["KTV Lắp đặt", "Giao nhận", "Quản lý", "Văn phòng"]
-                
-            col_a, col_b = st.columns([3, 1])
-            new_cd_input = col_a.text_input("Nhập chức danh mới:", key="new_cd_add")
-            if col_b.button("➕ Thêm", use_container_width=True):
-                if new_cd_input and new_cd_input.strip() not in st.session_state["list_chuc_danh"]:
-                    st.session_state["list_chuc_danh"].append(new_cd_input.strip())
-                    st.success(f"✅ Đã thêm '{new_cd_input}'")
-                    time.sleep(0.5)
-                    st.rerun()
-            st.write("**Danh sách hiện tại:**", ", ".join(st.session_state["list_chuc_danh"]))
-
-        # --- MỤC 2: TẠO TÀI KHOẢN MỚI (Đã sửa lỗi trùng thông báo) ---
-        with st.expander("➕ Tạo tài khoản nhân sự mới", expanded=False):
-            with st.form("add_user_full_fixed", clear_on_submit=True): 
-                c1, c2, c3 = st.columns(3)
-                n_u = c1.text_input("Username*", placeholder="tên đăng nhập").lower().strip()
-                n_p = c2.text_input("Mật khẩu*", type="password")
-                n_r = c3.selectbox("Quyền hệ thống", ["User", "Manager", "Admin", "System Admin"])
-                
-                n_ten = st.text_input("Họ và tên nhân viên*")
-                
-                c4, c5 = st.columns(2)
-                n_cd = c4.selectbox("Chức danh", st.session_state["list_chuc_danh"])
-                n_phone = c5.text_input("Số điện thoại")
-                
-                # Nút xác nhận nằm TRONG Form
-                submit_create = st.form_submit_button("🚀 TẠO TÀI KHOẢN", use_container_width=True)
-                
-                if submit_create:
-                    if not n_u or not n_p or not n_ten:
-                        st.error("❌ Vui lòng điền đầy đủ các thông tin có dấu (*)")
-                    else:
-                        try:
-                            with sqlite3.connect("data.db") as conn:
-                                # Kiểm tra tồn tại trước khi Insert để tránh lỗi hiển thị kép
-                                check = pd.read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
-                                
-                                if not check.empty:
-                                    st.error(f"❌ Tài khoản **{n_u}** đã tồn tại. Vui lòng chọn tên khác!")
-                                else:
-                                    conn.execute("""
-                                        INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
-                                        VALUES (?,?,?,?,?,?)
-                                    """, (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
-                                    st.success(f"✅ Tạo tài khoản **{n_u}** thành công!")
-                                    time.sleep(1.2)
-                                    st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Lỗi: {e}")
-
-        st.divider()
-
-        # --- MỤC 3: XÓA TÀI KHOẢN ---
-        st.markdown("#### 🗑️ Xóa tài khoản nhân sự")
-        with sqlite3.connect("data.db") as conn:
-            # Không cho phép tự xóa chính mình
-            df_to_del = pd.read_sql("SELECT username, ho_ten, role FROM quan_tri_vien WHERE username != ?", conn, params=(user,))
-        
-        if not df_to_del.empty:
-            df_to_del['display'] = df_to_del['ho_ten'] + " (" + df_to_del['username'] + ")"
-            u_del_display = st.selectbox("Chọn tài khoản cần xóa:", options=df_to_del['display'].tolist())
-            u_selected = df_to_del[df_to_del['display'] == u_del_display]['username'].values[0]
+        # --- TAB 2: QUẢN TRỊ TÀI KHOẢN (Chỉ dành cho System Admin) ---
+    if "🛠️ Quản trị tài khoản" in list_tabs:
+        idx = list_tabs.index("🛠️ Quản trị tài khoản")
+        with tabs[idx]:
             
-            confirm_del = st.checkbox(f"Tôi xác nhận muốn xóa vĩnh viễn tài khoản: **{u_selected}**")
-            if st.button("❌ THỰC HIỆN XÓA", type="primary", disabled=not confirm_del, use_container_width=True):
-                with sqlite3.connect("data.db") as conn:
-                    conn.execute("DELETE FROM quan_tri_vien WHERE username=?", (u_selected,))
-                st.success(f"💥 Đã xóa tài khoản {u_selected} thành công!")
-                time.sleep(1)
-                st.rerun()
-        else:
-            st.info("Chưa có tài khoản nào khác để xóa.")
+            # --- MỤC 1: QUẢN LÝ CHỨC DANH ---
+            with st.expander("📂 Quản lý danh mục Chức danh"):
+                if "list_chuc_danh" not in st.session_state:
+                    st.session_state["list_chuc_danh"] = ["KTV Lắp đặt", "Giao nhận", "Quản lý", "Văn phòng"]
+                    
+                col_a, col_b = st.columns([3, 1])
+                new_cd_input = col_a.text_input("Nhập chức danh mới:", key="new_cd_add")
+                if col_b.button("➕ Thêm", use_container_width=True):
+                    if new_cd_input and new_cd_input.strip() not in st.session_state["list_chuc_danh"]:
+                        st.session_state["list_chuc_danh"].append(new_cd_input.strip())
+                        st.success(f"✅ Đã thêm '{new_cd_input}'")
+                        time.sleep(0.5)
+                        st.rerun()
+                st.write("**Danh sách hiện tại:**", ", ".join(st.session_state["list_chuc_danh"]))
 
-        st.divider()
-        st.subheader("🔑 Bảo trì hệ thống")
-        
-        # --- MỤC 4: BACKUP & PHỤC HỒI DỮ LIỆU ---
-        with st.expander("💾 Sao lưu và Phục hồi dữ liệu"):
-            c1, c2 = st.columns(2)
-            
-            with c1:
-                st.markdown("##### 📥 Xuất dữ liệu (Backup)")
-                if os.path.exists("data.db"):
-                    with open("data.db", "rb") as f:
-                        st.download_button(
-                            label="📥 Tải tệp Backup (.db)",
-                            data=f,
-                            file_name=f"backup_system_{datetime.now().strftime('%d%m%Y_%H%M')}.db",
-                            mime="application/octet-stream",
-                            use_container_width=True
-                        )
-                    st.caption("Khuyến nghị: Backup trước khi thực hiện dọn dẹp Database.")
-            
-            with c2:
-                st.markdown("##### 📤 Phục hồi dữ liệu (Recovery)")
-                uploaded_db = st.file_uploader("Chọn tệp backup .db để phục hồi", type=["db"])
-                if uploaded_db is not None:
-                    if st.button("🔄 Xác nhận Ghi đè dữ liệu", type="secondary", use_container_width=True):
-                        try:
-                            with open("data.db", "wb") as f:
-                                f.write(uploaded_db.getbuffer())
-                            st.success("✅ Phục hồi thành công! Hệ thống đang khởi động lại...")
-                            time.sleep(2)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Lỗi phục hồi: {e}")
+            # --- MỤC 2: TẠO TÀI KHOẢN MỚI (Đã sửa lỗi trùng thông báo) ---
+            with st.expander("➕ Tạo tài khoản nhân sự mới", expanded=False):
+                with st.form("add_user_full_fixed", clear_on_submit=True): 
+                    c1, c2, c3 = st.columns(3)
+                    n_u = c1.text_input("Username*", placeholder="tên đăng nhập").lower().strip()
+                    n_p = c2.text_input("Mật khẩu*", type="password")
+                    n_r = c3.selectbox("Quyền hệ thống", ["User", "Manager", "Admin", "System Admin"])
+                    
+                    n_ten = st.text_input("Họ và tên nhân viên*")
+                    
+                    c4, c5 = st.columns(2)
+                    n_cd = c4.selectbox("Chức danh", st.session_state["list_chuc_danh"])
+                    n_phone = c5.text_input("Số điện thoại")
+                    
+                    # Nút xác nhận nằm TRONG Form
+                    submit_create = st.form_submit_button("🚀 TẠO TÀI KHOẢN", use_container_width=True)
+                    
+                    if submit_create:
+                        if not n_u or not n_p or not n_ten:
+                            st.error("❌ Vui lòng điền đầy đủ các thông tin có dấu (*)")
+                        else:
+                            try:
+                                with sqlite3.connect("data.db") as conn:
+                                    # Kiểm tra tồn tại trước khi Insert để tránh lỗi hiển thị kép
+                                    check = pd.read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
+                                    
+                                    if not check.empty:
+                                        st.error(f"❌ Tài khoản **{n_u}** đã tồn tại. Vui lòng chọn tên khác!")
+                                    else:
+                                        conn.execute("""
+                                            INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
+                                            VALUES (?,?,?,?,?,?)
+                                        """, (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
+                                        st.success(f"✅ Tạo tài khoản **{n_u}** thành công!")
+                                        time.sleep(1.2)
+                                        st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Lỗi: {e}")
 
-        # --- MỤC 5: RESET DATABASE (DÀNH CHO TEST) ---
-        with st.expander("🔥 Dọn dẹp & Xóa dữ liệu nghiệp vụ"):
-            st.warning("⚠️ CẢNH BÁO: Thao tác này sẽ xóa sạch dữ liệu Chấm công và Giao hàng. Quyền tài khoản System Admin được giữ lại.")
-            confirm_reset = st.checkbox("Tôi đồng ý xóa toàn bộ dữ liệu nghiệp vụ hiện có.")
+            st.divider()
+
+            # --- MỤC 3: XÓA TÀI KHOẢN ---
+            st.markdown("#### 🗑️ Xóa tài khoản nhân sự")
+            with sqlite3.connect("data.db") as conn:
+                # Không cho phép tự xóa chính mình
+                df_to_del = pd.read_sql("SELECT username, ho_ten, role FROM quan_tri_vien WHERE username != ?", conn, params=(user,))
             
-            if st.button("🗑️ THỰC HIỆN RESET", type="primary", disabled=not confirm_reset, use_container_width=True):
-                try:
+            if not df_to_del.empty:
+                df_to_del['display'] = df_to_del['ho_ten'] + " (" + df_to_del['username'] + ")"
+                u_del_display = st.selectbox("Chọn tài khoản cần xóa:", options=df_to_del['display'].tolist())
+                u_selected = df_to_del[df_to_del['display'] == u_del_display]['username'].values[0]
+                
+                confirm_del = st.checkbox(f"Tôi xác nhận muốn xóa vĩnh viễn tài khoản: **{u_selected}**")
+                if st.button("❌ THỰC HIỆN XÓA", type="primary", disabled=not confirm_del, use_container_width=True):
                     with sqlite3.connect("data.db") as conn:
-                        # Xóa dữ liệu chấm công và các đơn hàng
-                        conn.execute("DELETE FROM cham_cong") 
-                        conn.execute("DELETE FROM cham_cong_di_lam")
-                        # Xóa nhân viên nhưng giữ lại System Admin để có thể đăng nhập lại
-                        conn.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
-                        conn.commit()
-                    st.success("💥 Database đã được làm sạch!")
-                    time.sleep(1.5)
+                        conn.execute("DELETE FROM quan_tri_vien WHERE username=?", (u_selected,))
+                    st.success(f"💥 Đã xóa tài khoản {u_selected} thành công!")
+                    time.sleep(1)
                     st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Lỗi khi dọn dẹp: {e}")
+            else:
+                st.info("Chưa có tài khoản nào khác để xóa.")
+
+            st.divider()
+            st.subheader("🔑 Bảo trì hệ thống")
+            
+            # --- MỤC 4: BACKUP & PHỤC HỒI DỮ LIỆU ---
+            with st.expander("💾 Sao lưu và Phục hồi dữ liệu"):
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.markdown("##### 📥 Xuất dữ liệu (Backup)")
+                    if os.path.exists("data.db"):
+                        with open("data.db", "rb") as f:
+                            st.download_button(
+                                label="📥 Tải tệp Backup (.db)",
+                                data=f,
+                                file_name=f"backup_system_{datetime.now().strftime('%d%m%Y_%H%M')}.db",
+                                mime="application/octet-stream",
+                                use_container_width=True
+                            )
+                        st.caption("Khuyến nghị: Backup trước khi thực hiện dọn dẹp Database.")
+                
+                with c2:
+                    st.markdown("##### 📤 Phục hồi dữ liệu (Recovery)")
+                    uploaded_db = st.file_uploader("Chọn tệp backup .db để phục hồi", type=["db"])
+                    if uploaded_db is not None:
+                        if st.button("🔄 Xác nhận Ghi đè dữ liệu", type="secondary", use_container_width=True):
+                            try:
+                                with open("data.db", "wb") as f:
+                                    f.write(uploaded_db.getbuffer())
+                                st.success("✅ Phục hồi thành công! Hệ thống đang khởi động lại...")
+                                time.sleep(2)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Lỗi phục hồi: {e}")
+
+            # --- MỤC 5: RESET DATABASE (DÀNH CHO TEST) ---
+            with st.expander("🔥 Dọn dẹp & Xóa dữ liệu nghiệp vụ"):
+                st.warning("⚠️ CẢNH BÁO: Thao tác này sẽ xóa sạch dữ liệu Chấm công và Giao hàng. Quyền tài khoản System Admin được giữ lại.")
+                confirm_reset = st.checkbox("Tôi đồng ý xóa toàn bộ dữ liệu nghiệp vụ hiện có.")
+                
+                if st.button("🗑️ THỰC HIỆN RESET", type="primary", disabled=not confirm_reset, use_container_width=True):
+                    try:
+                        with sqlite3.connect("data.db") as conn:
+                            # Xóa dữ liệu chấm công và các đơn hàng
+                            conn.execute("DELETE FROM cham_cong") 
+                            conn.execute("DELETE FROM cham_cong_di_lam")
+                            # Xóa nhân viên nhưng giữ lại System Admin để có thể đăng nhập lại
+                            conn.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
+                            conn.commit()
+                        st.success("💥 Database đã được làm sạch!")
+                        time.sleep(1.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Lỗi khi dọn dẹp: {e}")
 
                    
 

@@ -286,7 +286,7 @@ ho_ten = st.session_state.get("ho_ten", "Nhân viên")
 chuc_danh = st.session_state.get("chuc_danh", "N/A")
 
 with st.sidebar:    
-    st.markdown(f"👤 Nhân viên: **{ho_ten}**")
+    st.markdown(f"👤 : **{ho_ten}**")
     st.caption(f"🎭 Quyền: {role}")
     if st.button("🚪 Đăng xuất", use_container_width=True):
         st.session_state["authenticated"] = False
@@ -498,14 +498,16 @@ if menu == "🕒 Chấm công đi làm":
                     st.info(f"ℹ️ Không có dữ liệu tháng {sel_m}/{sel_y}")
 
 # ==============================================================================
-# PHÂN HỆ 2: GIAO HÀNG - LẮP ĐẶT
+# PHÂN HỆ 2: GIAO HÀNG - LẮP ĐẶT (FULL HOÀN CHỈNH)
 # ==============================================================================
 elif menu == "📦 Giao hàng - Lắp đặt":
-    # 1. PHÂN QUYỀN TABS (Rõ ràng hơn)
+    # 1. PHÂN QUYỀN TABS
+    # Manager, Admin, System Admin có 3 tabs (bao gồm Duyệt đơn)
+    # Các chức danh còn lại có 2 tabs (không có Duyệt đơn)
     if role in ["Admin", "System Admin", "Manager"]:
         tabs = st.tabs(["📸 Chấm công lắp đặt", "📋 Duyệt đơn", "📈 Báo cáo lắp đặt"])
-    elif chuc_danh in ["KTV Lắp đặt", "Lắp đặt", "Giao nhận"]:
-        tabs = st.tabs(["📸 Chấm công lắp đặt", "📈 Báo cáo lắp đặt"]) 
+    elif chuc_danh in ["KTV Lắp đặt", "Lắp đặt", "Giao nhận", "Quản lý"] or role == "User":
+        tabs = st.tabs(["📸 Chấm công lắp đặt", "📈 Báo cáo lắp đặt"])
     else:
         st.warning("⚠️ Bạn không có quyền truy cập chức năng này.")
         st.stop()
@@ -520,59 +522,108 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             res_me = pd.read_sql("SELECT ho_ten FROM quan_tri_vien WHERE username = ?", conn, params=(user,))
             ten_nguoi_thao_tac = res_me.iloc[0]['ho_ten'] if not res_me.empty else user
 
+        # --- PHẦN PHÂN QUYỀN CHỌN NHÂN VIÊN ---
         target_user = user
         is_management = role in ["Manager", "Admin", "System Admin"]
         
         if is_management:
             with sqlite3.connect("data.db") as conn:
-                df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role IN ('User', 'Manager') AND username IS NOT NULL", conn)
+                # LỌC: Chỉ lấy những người có quyền 'User' hoặc 'Manager' (Bỏ qua Admin và System Admin)
+                if role == "System Admin":
+                    # System Admin có thể chấm công thay cho Admin, Manager và User
+                    # Nhưng theo yêu cầu mới: SysAdmin/Admin không cần chấm công -> Chỉ hiện Manager và User
+                    df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role IN ('Manager', 'User') AND username IS NOT NULL", conn)
+                elif role == "Admin":
+                    # Admin chấm công thay cho Manager và User
+                    df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role IN ('Manager', 'User') AND username IS NOT NULL", conn)
+                else: # Manager
+                    # Manager chỉ chấm công thay cho User
+                    df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role = 'User' AND username IS NOT NULL", conn)
             
             if not df_nv_list.empty:
                 df_nv_list['display'] = df_nv_list['ho_ten'] + " (" + df_nv_list['username'] + ")"
-                options = df_nv_list['display'].tolist() if role in ["System Admin", "Admin"] else ["Tự chấm công"] + df_nv_list['display'].tolist()
-                sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt thay cho:", options)
                 
-                if sel_nv_display != "Tự chấm công":
+                if role in ["System Admin", "Admin"]:
+                    # Đối với Admin/SysAdmin: Danh sách chỉ gồm nhân viên cấp dưới (không có tên mình)
+                    options = df_nv_list['display'].tolist()
+                    sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt cho nhân viên:", options)
                     target_user = df_nv_list[df_nv_list['display'] == sel_nv_display]['username'].values[0]
+                else:
+                    # Đối với Manager: Có thể "Tự chấm công" hoặc chấm cho "User"
+                    options = ["Tự chấm công"] + df_nv_list['display'].tolist()
+                    sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt thay cho:", options)
+                    if sel_nv_display != "Tự chấm công":
+                        target_user = df_nv_list[df_nv_list['display'] == sel_nv_display]['username'].values[0]
+                    else:
+                        target_user = user
 
         if "f_up_key" not in st.session_state: st.session_state["f_up_key"] = 0
-        uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
+        uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn *", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
         
         with st.form("form_lap_dat", clear_on_submit=True):
             c1, c2 = st.columns(2)
-            so_hd_in = c1.text_input("📝 Số hóa đơn (VD: HD12345)")
-            quang_duong = c1.number_input("🛣️ Quãng đường (km)", min_value=1, step=1)
-            combo = c2.selectbox("📦 Số lượng máy (Combo)", [1, 2, 3, 4, 5, 6])
-            noi_dung = c2.text_area("📍 Địa chỉ / Ghi chú")     
+            so_hd_in = c1.text_input("📝 Số hóa đơn *", placeholder="VD: HD12345")
+            quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1)
             
-            if st.form_submit_button("🚀 GỬI YÊU CẦU", use_container_width=True):
-                if not uploaded_file or not so_hd_in:
-                    st.error("❌ Thiếu Ảnh hoặc Số hóa đơn!")
+            st.write("---")
+            st.markdown("**📦 Số lượng thiết bị lắp đặt:**")
+            m1, m2 = st.columns(2)
+            combo_may_lon = m1.number_input("🤖 Máy lớn (200k/máy)", min_value=0, step=1)
+            combo_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1)
+            
+            noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *", height=100)     
+            
+            if st.form_submit_button("🚀 GỬI YÊU CẦU DUYỆT ĐƠN", use_container_width=True):
+                if not uploaded_file or not so_hd_in or not noi_dung:
+                    st.error("❌ Yêu cầu đầy đủ ảnh hoá đơn, số hoá đơn và địa chỉ!")              
+                elif combo_may_lon == 0 and combo_may_nho == 0:
+                    st.error("❌ Vui lòng nhập ít nhất 1 loại máy!")
                 else:
                     so_hd = so_hd_in.upper().strip()
-                    don_gia = 30000 if quang_duong < 20 else 50000 if quang_duong <= 30 else 70000
-                    tong_tien = combo * don_gia
+                    
+                    # --- LOGIC TÍNH TOÁN ĐA TẦNG ---
+                    if quang_duong <= 50:
+                        don_gia_km = 30000 if quang_duong < 20 else \
+                                     50000 if quang_duong <= 30 else \
+                                     70000 if quang_duong <= 40 else 80000
+                    else:
+                        don_gia_km = 80000 + (quang_duong - 50) * 5000
+
+                    tien_may_lon = combo_may_lon * 200000
+                    tien_may_nho = combo_may_nho * don_gia_km
+                    tong_tien = tien_may_lon + tien_may_nho
+                    
+                    tong_combo = combo_may_lon + combo_may_nho
+                    noi_dung_final = f"{noi_dung} | (Máy lớn: {combo_may_lon}, Máy nhỏ(hoặc vật tư #): {combo_may_nho})"
                     
                     if not os.path.exists("saved_images"): os.makedirs("saved_images")
-                    img_path = f"saved_images/{so_hd}_{datetime.now().strftime('%H%M%S')}.jpg"
+                    img_path = f"saved_images/{so_hd}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
                     
                     try:
+                        # Lưu file ảnh vật lý trước khi ghi DB để tránh lỗi hiển thị
+                        with open(img_path, "wb") as f: 
+                            f.write(uploaded_file.getbuffer())
+
                         with sqlite3.connect("data.db") as conn:
                             conn.execute("""INSERT INTO cham_cong (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
-                                VALUES (?,?,?,?,?,?,?,?,?)""", (target_user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), so_hd, noi_dung, quang_duong, combo, tong_tien, img_path, 'Chờ duyệt'))
-                            with open(img_path, "wb") as f: f.write(uploaded_file.getbuffer())
+                                VALUES (?,?,?,?,?,?,?,?,?)""", 
+                                (target_user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), so_hd, noi_dung_final, 
+                                 quang_duong, tong_combo, tong_tien, img_path, 'Chờ duyệt'))
                             
-                        st.success(f"✅ Đã gửi đơn! (Tiền công: {tong_tien:,.0f} VNĐ)")
+                        st.success(f"✅ Đã gửi đơn! (Tổng tiền: {tong_tien:,.0f} VNĐ)")
                         st.session_state["f_up_key"] += 1
-                        time.sleep(1.5)
+                        time.sleep(1)
                         st.rerun()
                     except sqlite3.IntegrityError:
+                        if os.path.exists(img_path): os.remove(img_path)
                         st.error(f"❌ Số hóa đơn **{so_hd}** đã tồn tại!")
+                    except Exception as e:
+                        st.error(f"❌ Lỗi: {e}")
 
-    # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
+   # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
     if role in ["Admin", "System Admin", "Manager"]:
         with tabs[1]:
-            st.markdown("### 📋 Danh sách đơn chờ duyệt")
+            st.markdown("#### 📋 Danh sách đơn chờ duyệt")
             with sqlite3.connect("data.db") as conn:
                 df_p = pd.read_sql("SELECT c.*, q.ho_ten FROM cham_cong c LEFT JOIN quan_tri_vien q ON c.ten = q.username WHERE c.trang_thai='Chờ duyệt' ORDER BY c.thoi_gian DESC", conn)
 
@@ -586,22 +637,31 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             st.write(f"**📍 Đ/C:** {r['noi_dung']}")
                             st.write(f"🛣️ {r['quang_duong']} km | 📦 {r['combo']} máy")
                             st.markdown(f"#### 💰: `{r['thanh_tien']:,.0f}` VNĐ")
-                            b1, b2 = st.columns(2)
-                            if b1.button("✅ DUYỆT", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
-                                quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác")
-                                st.rerun()
-                            with b2:
-                                with st.popover("❌ TỪ CHỐI", use_container_width=True):
-                                    reason = st.text_area("Lý do:", key=f"txt_{r['id']}")
-                                    if st.button("Xác nhận", key=f"conf_{r['id']}", use_container_width=True):
-                                        quick_update_status(r["id"], "Từ chối", reason)
-                                        st.rerun()
+                            
+                            # --- PHÂN QUYỀN THAO TÁC NÚT BẤM ---
+                            if role in ["Admin","System Admin"]:
+                                b1, b2 = st.columns(2)
+                                if b1.button("✅ DUYỆT", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
+                                    quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác")
+                                    st.rerun()
+                                with b2:
+                                    with st.popover("❌ TỪ CHỐI", use_container_width=True):
+                                        reason = st.text_area("Lý do:", key=f"txt_{r['id']}")
+                                        if st.button("Xác nhận", key=f"conf_{r['id']}", use_container_width=True):
+                                            quick_update_status(r["id"], "Từ chối", reason)
+                                            st.rerun()
+                            else:
+                                # Nếu là Manager
+                                st.info("ℹ️ Bạn chỉ có quyền xem thông tin đơn này. Quyền duyệt thuộc về Kế toán.")
+                                
                         with cr:
                             if r["hinh_anh"] and os.path.exists(r["hinh_anh"]):
-                                st.image(r["hinh_anh"], use_container_width=True)
+                                st.image(r["hinh_anh"], caption=f"Ảnh đối soát HĐ {r['so_hoa_don']}", use_container_width=True)
+                            else:
+                                st.warning("⚠️ Không tìm thấy hình ảnh.")
 
-    # --- TAB 3 (HOẶC TAB CUỐI): BÁO CÁO LẮP ĐẶT ---
-    # QUAN TRỌNG: Đặt logic này RA NGOÀI khối if admin để User cũng thấy (thông qua tabs[-1])
+    # --- TAB 3 (TAB CUỐI): BÁO CÁO LẮP ĐẶT ---
+    # Dùng tabs[-1] để tự động thích ứng với cả User (tab index 1) và Admin (tab index 2)
     with tabs[-1]:
         with sqlite3.connect("data.db") as conn:
             query = """
@@ -616,7 +676,6 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             st.info("📭 Chưa có dữ liệu đơn hàng.")
         else:
             df_raw["Thời Gian"] = pd.to_datetime(df_raw["Thời Gian"])
-            # Phân quyền xem dữ liệu
             if role in ["Admin", "System Admin", "Manager"]:
                 df_all = df_raw.copy()
             else:
@@ -625,7 +684,6 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             if df_all.empty:
                 st.info("ℹ️ Bạn chưa có đơn hàng nào.")
             else:
-                # 1. BIỂU ĐỒ (ADMIN)
                 if role in ["Admin", "System Admin", "Manager"]:
                     st.markdown("### 📈 Tổng quan")
                     df_ok = df_all[df_all["Trạng thái"] == "Đã duyệt"]
@@ -636,14 +694,11 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         with c2: st.plotly_chart(px.pie(stats, values="Doanh_thu", names="Tên", title="Doanh thu"), use_container_width=True)
                     st.divider()
 
-                # 2. BỘ LỌC
                 st.subheader("📄 Chi tiết đơn hàng")
                 col_f1, col_f2, col_f3 = st.columns(3)
                 d_range = col_f1.date_input("📅 Thời gian", value=[date.today().replace(day=1), date.today()])
-                
                 nv_opts = ["Tất cả"] + sorted(df_all["Tên"].astype(str).unique().tolist())
-                is_disabled = role not in ["Admin", "System Admin", "Manager"]
-                sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, disabled=is_disabled)
+                sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, disabled=(role not in ["Admin", "System Admin", "Manager"]))
                 sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
 
                 if len(d_range) == 2:
@@ -674,7 +729,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             }
                         )
 
-                        # 3. SỬA ĐƠN (USER)
+                        # 3. SỬA ĐƠN (USER TỰ SỬA KHI CHƯA DUYỆT)
                         if role not in ["Admin", "System Admin", "Manager"]:
                             st.divider()
                             st.subheader("🛠 Sửa đơn (Đơn Chờ duyệt)")
@@ -688,18 +743,23 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     n_hd = c1.text_input("Số HĐ", value=row["Số HĐ"])
                                     n_km = c1.number_input("Km", value=float(row["Km"]))
                                     n_dc = c2.text_input("Địa chỉ", value=row["Địa chỉ"])
-                                    n_cb = c2.selectbox("Combo", [1,2,3,4,5,6], index=int(row["combo"])-1)
+                                    # Giả định n_cb là tổng số máy
+                                    n_cb = c2.number_input("Số máy lớn", value=1, min_value=0) 
                                     
                                     if st.form_submit_button("💾 Cập nhật", use_container_width=True):
-                                        n_tien = n_cb * (30000 if n_km < 20 else 50000 if n_km <= 30 else 70000)
+                                        # Tính lại tiền nhanh theo km (quy tắc đơn giản hóa cho sửa đơn)
+                                        if n_km <= 50:
+                                            dg = 30000 if n_km < 20 else 50000 if n_km <= 30 else 70000 if n_km <= 40 else 80000
+                                        else:
+                                            dg = 80000 + (n_km - 50) * 5000
+                                        n_tien = (n_cb * 200000) + dg # Ví dụ logic tính lại
+                                        
                                         with sqlite3.connect("data.db") as conn:
-                                            conn.execute("UPDATE cham_cong SET so_hoa_don=?, noi_dung=?, quang_duong=?, combo=?, thanh_tien=? WHERE id=? AND trang_thai='Chờ duyệt'", 
-                                                         (n_hd, n_dc, n_km, n_cb, n_tien, int(row["id"])))
+                                            conn.execute("UPDATE cham_cong SET so_hoa_don=?, noi_dung=?, quang_duong=?, thanh_tien=? WHERE id=? AND trang_thai='Chờ duyệt'", 
+                                                         (n_hd.upper(), n_dc, n_km, n_tien, int(row["id"])))
                                         st.success("Cập nhật thành công!")
                                         time.sleep(1)
                                         st.rerun()
-
-# ==============================================================================
 # ==============================================================================
 # PHÂN HỆ 3: QUẢN TRỊ HỆ THỐNG
 # ==============================================================================
@@ -717,7 +777,7 @@ elif menu == "⚙️ Quản trị hệ thống":
     # 2. XỬ LÝ NỘI DUNG TỪNG TAB
     
    # ---------------------------------------------------------
-    # TAB: QUẢN LÝ NHÂN SỰ (👥) - PATCH LOGIC CẬP NHẬT ĐA TẦNG
+    # TAB: QUẢN LÝ NHÂN SỰ (👥) - BẢN SỬA LỖI TRIỆT ĐỂ
     # ---------------------------------------------------------
     if "👥 Nhân sự" in list_tabs:
         idx = list_tabs.index("👥 Nhân sự")
@@ -730,207 +790,235 @@ elif menu == "⚙️ Quản trị hệ thống":
             if df_users.empty:
                 st.info("Chưa có dữ liệu nhân sự.")
             else:
-                # 1. TẠO BẢNG HIỂN THỊ
+                # 1. BẢNG HIỂN THỊ
                 df_users_display = df_users.reset_index()
                 df_users_display['index'] = df_users_display['index'] + 1
-                
                 st.dataframe(
                     df_users_display,
                     use_container_width=True,
                     hide_index=True,
                     column_order=("index", "ho_ten", "chuc_danh", "role", "so_dien_thoai", "dia_chi"),
-                    column_config={
-                        "index": "STT", "ho_ten": "Họ tên", "chuc_danh": "Chức danh",
-                        "role": "Quyền", "so_dien_thoai": "SĐT", "dia_chi": "Địa chỉ"
-                    }
+                    column_config={"index": "STT", "ho_ten": "Họ tên", "chuc_danh": "Chức danh", "role": "Quyền"}
                 )
 
                 st.divider()
                 st.markdown("#### 🛠️ Cập nhật thông tin nhân sự")
 
-                # 2. LOGIC LỌC LISTBOX & PHÂN QUYỀN
-                if role == "Admin":
-                    df_filter = df_users[df_users['role'] != 'System Admin'].copy()
-                else:
+                # 2. LOGIC PHÂN QUYỀN CHỌN NHÂN VIÊN
+                if role == "System Admin":
                     df_filter = df_users.copy()
+                elif role == "Admin":
+                    df_filter = df_users[df_users['role'].isin(['Manager', 'User'])].copy()
+                elif role == "Manager":
+                    df_filter = df_users[df_users['role'] == 'User'].copy()
+                else:
+                    df_filter = pd.DataFrame()
 
-                df_filter['display_name'] = df_filter['ho_ten'] + " (" + df_filter['chuc_danh'] + ")"
-                
-                selected_display = st.selectbox(
-                    "Chọn nhân viên cần cập nhật thông tin:", 
-                    options=df_filter['display_name'].tolist(),
-                    key="sel_edit_user_name"
-                )
-                
-                target_u = df_filter[df_filter['display_name'] == selected_display]['username'].values[0]
-                row = df_users[df_users['username'] == target_u].iloc[0]
-                
-                is_disabled_for_admin = (role != "System Admin")
-
-                # 3. FORM CẬP NHẬT
-                with st.form(f"form_edit_nv_{target_u}"):
-                    st.caption(f"Đang chỉnh sửa tài khoản: {target_u}")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        new_name = st.text_input("Họ và tên", value=str(row['ho_ten']))
-                        new_phone = st.text_input("Số điện thoại", value=str(row['so_dien_thoai']))
-                        new_addr = st.text_area("Địa chỉ", value=str(row['dia_chi']), height=100)
-                    with c2:
-                        # CHỨC DANH: Chuyển sang Selectbox lấy từ danh mục
-                        current_cd = str(row['chuc_danh'])
-                        if current_cd not in st.session_state["list_chuc_danh"]:
-                            st.session_state["list_chuc_danh"].append(current_cd)
-                        
-                        new_cd = st.selectbox("Chức danh", st.session_state["list_chuc_danh"], 
-                                            index=st.session_state["list_chuc_danh"].index(current_cd),
-                                            disabled=is_disabled_for_admin)
-                        
-                        roles_list = ["User", "Manager", "Admin", "System Admin"]
-                        curr_role_idx = roles_list.index(row['role']) if row['role'] in roles_list else 0
-                        new_role = st.selectbox("Quyền hệ thống", roles_list, index=curr_role_idx, disabled=is_disabled_for_admin)
-                        
-                        new_pass = st.text_input("Mật khẩu mới (Để trống nếu giữ nguyên)", type="password")
-                        
-                        current_birth = date.today()
-                        if row['ngay_sinh'] and str(row['ngay_sinh']) != 'None':
-                            try: current_birth = pd.to_datetime(row['ngay_sinh']).date()
-                            except: pass
-                        new_birth = st.date_input("Ngày sinh", value=current_birth)
-
-                    if st.form_submit_button("💾 XÁC NHẬN CẬP NHẬT", use_container_width=True):
-                        try:
-                            with sqlite3.connect("data.db") as conn:
-                                if new_pass.strip():
-                                    conn.execute("""UPDATE quan_tri_vien 
-                                                 SET ho_ten=?, so_dien_thoai=?, dia_chi=?, ngay_sinh=?, password=?, chuc_danh=?, role=?
-                                                 WHERE username=?""",
-                                                (new_name, new_phone, new_addr, new_birth.strftime("%Y-%m-%d"), hash_password(new_pass), new_cd, new_role, target_u))
-                                else:
-                                    conn.execute("""UPDATE quan_tri_vien 
-                                                 SET ho_ten=?, so_dien_thoai=?, dia_chi=?, ngay_sinh=?, chuc_danh=?, role=?
-                                                 WHERE username=?""",
-                                                (new_name, new_phone, new_addr, new_birth.strftime("%Y-%m-%d"), new_cd, new_role, target_u))
-                            st.success(f"✅ Đã cập nhật thành công cho {new_name}!")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Lỗi: {e}")
-
-    # --- TAB 2: QUẢN TRỊ TÀI KHOẢN (Chỉ dành cho System Admin) ---
-    if "🛠️ Quản trị tài khoản" in list_tabs:
-        idx = list_tabs.index("🛠️ Quản trị tài khoản")
-        with tabs[idx]:
-            
-
-            # --- MỤC 3: QUẢN LÝ CHỨC DANH (Code cũ của bạn) ---
-            with st.expander("📂 Quản lý danh mục Chức danh"):
-                col_a, col_b = st.columns([3, 1])
-                new_cd_input = col_a.text_input("Nhập chức danh mới:", key="new_cd_add")
-                if col_b.button("➕ Thêm", use_container_width=True):
-                    if new_cd_input and new_cd_input not in st.session_state["list_chuc_danh"]:
-                        st.session_state["list_chuc_danh"].append(new_cd_input)
-                        st.success(f"Đã thêm '{new_cd_input}'")
-                        time.sleep(0.5)
-                        st.rerun()
-                st.write("Danh sách hiện tại:", ", ".join(st.session_state["list_chuc_danh"]))
-
-            # --- MỤC 4: TẠO TÀI KHOẢN MỚI (Code cũ của bạn) ---
-            with st.expander("➕ Tạo tài khoản nhân sự mới", expanded=False):
-                with st.form("add_user_full", clear_on_submit=True): 
-                    c1, c2, c3 = st.columns(3)
-                    n_u = c1.text_input("Username*").lower().strip()
-                    n_p = c2.text_input("Mật khẩu*", type="password")
-                    n_r = c3.selectbox("Quyền", ["User", "Manager", "Admin", "System Admin"])
-                    n_ten = st.text_input("Họ và tên*")
-                    c4, c5 = st.columns(2)
-                    n_cd = c4.selectbox("Chức danh", st.session_state["list_chuc_danh"])
-                    n_phone = c5.text_input("Số điện thoại")
+                if df_filter.empty:
+                    st.warning("🔒 Bạn không có quyền cập nhật nhân sự cấp cao hơn.")
+                else:
+                    df_filter['display_name'] = df_filter['ho_ten'] + " (" + df_filter['chuc_danh'] + ")"
+                    selected_display = st.selectbox("Chọn nhân viên:", options=df_filter['display_name'].tolist())
                     
-                    if st.form_submit_button("🚀 TẠO TÀI KHOẢN", use_container_width=True):
-                        if not n_u or not n_p or not n_ten:
-                            st.error("❌ Thiếu thông tin!")
-                        else:
+                    target_u = df_filter[df_filter['display_name'] == selected_display]['username'].values[0]
+                    row = df_users[df_users['username'] == target_u].iloc[0]
+                    
+                    # Quyền khóa (Chỉ SysAdmin mới được sửa Quyền/Chức danh)
+                    is_locked = (role != "System Admin")
+
+                    # 3. FORM CẬP NHẬT (Đảm bảo nút Submit nằm TRONG with)
+                    with st.form(key=f"edit_user_form_{target_u}"):
+                        st.caption(f"Đang chỉnh sửa: {target_u}")
+                        c1, c2 = st.columns(2)
+                        
+                        with c1:
+                            new_name = st.text_input("Họ và tên", value=str(row['ho_ten']))
+                            new_phone = st.text_input("Số điện thoại", value=str(row['so_dien_thoai']))
+                            new_addr = st.text_area("Địa chỉ", value=str(row['dia_chi']), height=155)
+                        
+                        with c2:
+                            # Sửa lỗi KeyError: 'ngay_birth' -> dùng 'ngay_sinh'
+                            current_cd = str(row['chuc_danh'])
+                            if "list_chuc_danh" not in st.session_state:
+                                st.session_state["list_chuc_danh"] = ["KTV Lắp đặt", "Giao nhận", "Quản lý", "Văn phòng"]
+                            
+                            if current_cd not in st.session_state["list_chuc_danh"]:
+                                st.session_state["list_chuc_danh"].append(current_cd)
+                                
+                            new_cd = st.selectbox("Chức danh", st.session_state["list_chuc_danh"], 
+                                                index=st.session_state["list_chuc_danh"].index(current_cd),
+                                                disabled=is_locked)
+                            
+                            r_list = ["User", "Manager", "Admin", "System Admin"]
+                            curr_r_idx = r_list.index(row['role']) if row['role'] in r_list else 0
+                            new_role = st.selectbox("Quyền", r_list, index=curr_r_idx, disabled=is_locked)
+                            
+                            new_pass = st.text_input("Mật khẩu mới (Để trống nếu không đổi)", type="password")
+                            
+                            # Xử lý ngày sinh an toàn
+                            val_birth = date.today()
+                            if 'ngay_sinh' in row and row['ngay_sinh'] and str(row['ngay_sinh']) != 'None':
+                                try: val_birth = pd.to_datetime(row['ngay_sinh']).date()
+                                except: pass
+                            new_birth = st.date_input("Ngày sinh", value=val_birth)
+
+                        # NÚT BẤM PHẢI NẰM Ở ĐÂY (TRONG FORM)
+                        submit_btn = st.form_submit_button("💾 XÁC NHẬN CẬP NHẬT", use_container_width=True)
+                        
+                        if submit_btn:
                             try:
                                 with sqlite3.connect("data.db") as conn:
+                                    if new_pass.strip():
+                                        conn.execute("""UPDATE quan_tri_vien 
+                                                     SET ho_ten=?, so_dien_thoai=?, dia_chi=?, ngay_sinh=?, password=?, chuc_danh=?, role=?
+                                                     WHERE username=?""",
+                                                    (new_name, new_phone, new_addr, new_birth.strftime("%Y-%m-%d"), hash_password(new_pass), new_cd, new_role, target_u))
+                                    else:
+                                        conn.execute("""UPDATE quan_tri_vien 
+                                                     SET ho_ten=?, so_dien_thoai=?, dia_chi=?, ngay_sinh=?, chuc_danh=?, role=?
+                                                     WHERE username=?""",
+                                                    (new_name, new_phone, new_addr, new_birth.strftime("%Y-%m-%d"), new_cd, new_role, target_u))
+                                st.success(f"✅ Đã cập nhật thành công!")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
+
+    # --- TAB 2: QUẢN TRỊ TÀI KHOẢN (Chỉ dành cho System Admin) ---
+if "🛠️ Quản trị tài khoản" in list_tabs:
+    idx = list_tabs.index("🛠️ Quản trị tài khoản")
+    with tabs[idx]:
+        
+        # --- MỤC 1: QUẢN LÝ CHỨC DANH ---
+        with st.expander("📂 Quản lý danh mục Chức danh"):
+            if "list_chuc_danh" not in st.session_state:
+                st.session_state["list_chuc_danh"] = ["KTV Lắp đặt", "Giao nhận", "Quản lý", "Văn phòng"]
+                
+            col_a, col_b = st.columns([3, 1])
+            new_cd_input = col_a.text_input("Nhập chức danh mới:", key="new_cd_add")
+            if col_b.button("➕ Thêm", use_container_width=True):
+                if new_cd_input and new_cd_input.strip() not in st.session_state["list_chuc_danh"]:
+                    st.session_state["list_chuc_danh"].append(new_cd_input.strip())
+                    st.success(f"✅ Đã thêm '{new_cd_input}'")
+                    time.sleep(0.5)
+                    st.rerun()
+            st.write("**Danh sách hiện tại:**", ", ".join(st.session_state["list_chuc_danh"]))
+
+        # --- MỤC 2: TẠO TÀI KHOẢN MỚI (Đã sửa lỗi trùng thông báo) ---
+        with st.expander("➕ Tạo tài khoản nhân sự mới", expanded=False):
+            with st.form("add_user_full_fixed", clear_on_submit=True): 
+                c1, c2, c3 = st.columns(3)
+                n_u = c1.text_input("Username*", placeholder="tên đăng nhập").lower().strip()
+                n_p = c2.text_input("Mật khẩu*", type="password")
+                n_r = c3.selectbox("Quyền hệ thống", ["User", "Manager", "Admin", "System Admin"])
+                
+                n_ten = st.text_input("Họ và tên nhân viên*")
+                
+                c4, c5 = st.columns(2)
+                n_cd = c4.selectbox("Chức danh", st.session_state["list_chuc_danh"])
+                n_phone = c5.text_input("Số điện thoại")
+                
+                # Nút xác nhận nằm TRONG Form
+                submit_create = st.form_submit_button("🚀 TẠO TÀI KHOẢN", use_container_width=True)
+                
+                if submit_create:
+                    if not n_u or not n_p or not n_ten:
+                        st.error("❌ Vui lòng điền đầy đủ các thông tin có dấu (*)")
+                    else:
+                        try:
+                            with sqlite3.connect("data.db") as conn:
+                                # Kiểm tra tồn tại trước khi Insert để tránh lỗi hiển thị kép
+                                check = pd.read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
+                                
+                                if not check.empty:
+                                    st.error(f"❌ Tài khoản **{n_u}** đã tồn tại. Vui lòng chọn tên khác!")
+                                else:
                                     conn.execute("""
                                         INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
                                         VALUES (?,?,?,?,?,?)
                                     """, (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
-                                st.success("✅ Thành công!")
-                                time.sleep(1); st.rerun()
-                            except: st.error("❌ Username tồn tại!")
+                                    st.success(f"✅ Tạo tài khoản **{n_u}** thành công!")
+                                    time.sleep(1.2)
+                                    st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Lỗi: {e}")
 
-            st.divider()
+        st.divider()
 
-            # --- MỤC 5: XÓA TÀI KHOẢN (Code cũ của bạn) ---
-            st.markdown("#### 🗑️ Xóa tài khoản nhân sự")
-            with sqlite3.connect("data.db") as conn:
-                df_to_del = pd.read_sql("SELECT username, ho_ten, role FROM quan_tri_vien WHERE username != ?", conn, params=(user,))
+        # --- MỤC 3: XÓA TÀI KHOẢN ---
+        st.markdown("#### 🗑️ Xóa tài khoản nhân sự")
+        with sqlite3.connect("data.db") as conn:
+            # Không cho phép tự xóa chính mình
+            df_to_del = pd.read_sql("SELECT username, ho_ten, role FROM quan_tri_vien WHERE username != ?", conn, params=(user,))
+        
+        if not df_to_del.empty:
+            df_to_del['display'] = df_to_del['ho_ten'] + " (" + df_to_del['username'] + ")"
+            u_del_display = st.selectbox("Chọn tài khoản cần xóa:", options=df_to_del['display'].tolist())
+            u_selected = df_to_del[df_to_del['display'] == u_del_display]['username'].values[0]
             
-            if not df_to_del.empty:
-                df_to_del['display'] = df_to_del['ho_ten'] + " (" + df_to_del['username'] + ")"
-                u_del_display = st.selectbox("Chọn tài khoản xóa:", options=df_to_del['display'].tolist())
-                u_selected = df_to_del[df_to_del['display'] == u_del_display]['username'].values[0]
-                
-                confirm_del = st.checkbox(f"Xác nhận xóa tài khoản {u_selected}")
-                if st.button("❌ XÓA USER", type="primary", disabled=not confirm_del, use_container_width=True):
+            confirm_del = st.checkbox(f"Tôi xác nhận muốn xóa vĩnh viễn tài khoản: **{u_selected}**")
+            if st.button("❌ THỰC HIỆN XÓA", type="primary", disabled=not confirm_del, use_container_width=True):
+                with sqlite3.connect("data.db") as conn:
+                    conn.execute("DELETE FROM quan_tri_vien WHERE username=?", (u_selected,))
+                st.success(f"💥 Đã xóa tài khoản {u_selected} thành công!")
+                time.sleep(1)
+                st.rerun()
+        else:
+            st.info("Chưa có tài khoản nào khác để xóa.")
+
+        st.divider()
+        st.subheader("🔑 Bảo trì hệ thống")
+        
+        # --- MỤC 4: BACKUP & PHỤC HỒI DỮ LIỆU ---
+        with st.expander("💾 Sao lưu và Phục hồi dữ liệu"):
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                st.markdown("##### 📥 Xuất dữ liệu (Backup)")
+                if os.path.exists("data.db"):
+                    with open("data.db", "rb") as f:
+                        st.download_button(
+                            label="📥 Tải tệp Backup (.db)",
+                            data=f,
+                            file_name=f"backup_system_{datetime.now().strftime('%d%m%Y_%H%M')}.db",
+                            mime="application/octet-stream",
+                            use_container_width=True
+                        )
+                    st.caption("Khuyến nghị: Backup trước khi thực hiện dọn dẹp Database.")
+            
+            with c2:
+                st.markdown("##### 📤 Phục hồi dữ liệu (Recovery)")
+                uploaded_db = st.file_uploader("Chọn tệp backup .db để phục hồi", type=["db"])
+                if uploaded_db is not None:
+                    if st.button("🔄 Xác nhận Ghi đè dữ liệu", type="secondary", use_container_width=True):
+                        try:
+                            with open("data.db", "wb") as f:
+                                f.write(uploaded_db.getbuffer())
+                            st.success("✅ Phục hồi thành công! Hệ thống đang khởi động lại...")
+                            time.sleep(2)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Lỗi phục hồi: {e}")
+
+        # --- MỤC 5: RESET DATABASE (DÀNH CHO TEST) ---
+        with st.expander("🔥 Dọn dẹp & Xóa dữ liệu nghiệp vụ"):
+            st.warning("⚠️ CẢNH BÁO: Thao tác này sẽ xóa sạch dữ liệu Chấm công và Giao hàng. Quyền tài khoản System Admin được giữ lại.")
+            confirm_reset = st.checkbox("Tôi đồng ý xóa toàn bộ dữ liệu nghiệp vụ hiện có.")
+            
+            if st.button("🗑️ THỰC HIỆN RESET", type="primary", disabled=not confirm_reset, use_container_width=True):
+                try:
                     with sqlite3.connect("data.db") as conn:
-                        conn.execute("DELETE FROM quan_tri_vien WHERE username=?", (u_selected,))
-                    st.success("💥 Đã xóa!"); time.sleep(1); st.rerun()
-            st.divider()
-            st.subheader("🔑 Bảo trì hệ thống")
-            
-            # --- MỤC 1: BACKUP & PHỤC HỒI DỮ LIỆU ---
-            with st.expander("💾 Sao lưu và Phục hồi "):
-                c1, c2 = st.columns(2)
-                
-                with c1:
-                    st.markdown("##### 📥 Xuất dữ liệu (Backup)")
-                    if os.path.exists("data.db"):
-                        with open("data.db", "rb") as f:
-                            st.download_button(
-                                label="📥 Tải tệp Backup (.db)",
-                                data=f,
-                                file_name=f"backup_data_{datetime.now().strftime('%d%m%Y_%H%M')}.db",
-                                mime="application/octet-stream",
-                                use_container_width=True
-                            )
-                        st.info("Nên backup dữ liệu định kỳ hoặc trước khi xóa database.")
-                
-                with c2:
-                    st.markdown("##### 📤 Phục hồi dữ liệu (Recovery)")
-                    uploaded_db = st.file_upload_label = st.file_uploader("Chọn tệp .db để phục hồi", type=["db"])
-                    if uploaded_db is not None:
-                        if st.button("🔄 Xác nhận Ghi đè & Phục hồi", type="secondary", use_container_width=True):
-                            try:
-                                with open("data.db", "wb") as f:
-                                    f.write(uploaded_db.getbuffer())
-                                st.success("✅ Phục hồi thành công! Hệ thống sẽ khởi động lại...")
-                                time.sleep(2)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Lỗi phục hồi: {e}")
-
-            # --- MỤC 2: RESET DATABASE (DÀNH CHO TEST) ---
-            with st.expander("🔥 Dọn dẹp & Xóa dữ liệu"):
-                st.error("⚠️ CẢNH BÁO: Thao tác này sẽ xóa sạch các bảng Chấm công/Đơn hàng. Không thể hoàn tác!")
-                confirm_reset = st.checkbox("Tôi hiểu và muốn xóa toàn bộ dữ liệu giao hàng/chấm công.")
-                
-                if st.button("🗑️ THỰC HIỆN RESET DATABASE", type="primary", disabled=not confirm_reset, use_container_width=True):
-                    try:
-                        with sqlite3.connect("data.db") as conn:
-                            # Xóa dữ liệu các bảng nghiệp vụ (không xóa bảng nhân sự để tránh mất quyền đăng nhập)
-                            # Bạn có thể thêm tên các bảng khác vào đây nếu có
-                            conn.execute("DELETE FROM cham_cong") 
-                            conn.execute("DELETE FROM cham_cong_di_lam")
-                            conn.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
-                            # conn.execute("DELETE FROM bang_khac") # Ví dụ
-                            conn.commit()
-                        st.success("💥 Đã dọn dẹp sạch dữ liệu test!")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Lỗi khi xóa: {e}")
+                        # Xóa dữ liệu chấm công và các đơn hàng
+                        conn.execute("DELETE FROM cham_cong") 
+                        conn.execute("DELETE FROM cham_cong_di_lam")
+                        # Xóa nhân viên nhưng giữ lại System Admin để có thể đăng nhập lại
+                        conn.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
+                        conn.commit()
+                    st.success("💥 Database đã được làm sạch!")
+                    time.sleep(1.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi dọn dẹp: {e}")
 
                    
 

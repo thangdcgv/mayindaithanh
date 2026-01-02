@@ -5,13 +5,13 @@ from datetime import datetime, date
 import os
 import plotly.express as px
 import hashlib
-import time  # Quan trọng: Dùng để delay thông báo trước khi rerun
+import time  
 import io
 import re
 import base64
 
 # ==============================================================================
-# 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE (PERFORMANCE PATCH)
+# 1. HÀM HỆ THỐNG 
 # ==============================================================================
 
 @st.cache_resource

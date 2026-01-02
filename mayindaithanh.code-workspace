@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../AppChamCong/AppChamCong-mirror.git"
+		},
+		{
+			"path": "../AppChamCong/saved_images"
+		},
+		{
+			"path": "../AppChamCong/venv"
+		}
+	],
+	"settings": {}
+}

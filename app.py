@@ -1031,7 +1031,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         c1, c2 = st.columns(2)
                                         n_hd_in = c1.text_input("📝 Số hóa đơn *", value=str(row_data['Số HĐ']))
                                         # Giả định lấy giá trị cũ từ nội dung hoặc query thêm nếu cần. Ở đây dùng mặc định từ bảng hiển thị.
-                                        n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=20) 
+                                        n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=1) 
                                         
                                         m1, m2 = st.columns(2)
                                         n_may_lon = m1.number_input("🤖 Máy lớn", min_value=0, step=1, value=0)

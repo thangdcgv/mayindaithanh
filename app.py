@@ -23,7 +23,7 @@ def get_base64_of_bin_file(bin_file):
         data = f.read()
     return base64.b64encode(data).decode()
 
-logo_filename = "favicon.ico"  
+logo_filename = "icon.png"  
 
 # 3. Xử lý logic chèn HTML
 try:
@@ -34,8 +34,8 @@ try:
         st.markdown(
             f"""
             <head>
-                <link rel="apple-touch-icon" href="data:image/png;base64,{img_base}">
-                <link rel="icon" type="image/png" href="data:image/png;base64,{img_base}">
+                <link rel="apple-touch-icon" href="data:image/png;base64,{img_base}?v=2">
+                <link rel="icon" type="image/png" href="data:image/png;base64,{img_base}?v=2">
                 <meta name="apple-mobile-web-app-capable" content="yes">
                 <meta name="apple-mobile-web-app-title" content="Chấm công">
             </head>

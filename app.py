@@ -62,16 +62,6 @@ def init_db():
             nguoi_thao_tac TEXT
         )''')
         
-        # Bổ sung cột nếu thiếu (Migration)
-        try:
-            c.execute("ALTER TABLE cham_cong_di_lam ADD COLUMN nguoi_thao_tac TEXT")
-        except sqlite3.OperationalError: pass
-        try:
-            c.execute("ALTER TABLE cham_cong_di_lam ADD COLUMN ghi_chu TEXT")
-        except sqlite3.OperationalError: pass
-        try:
-            c.execute("ALTER TABLE cham_cong ADD COLUMN ghi_chu_duyet TEXT DEFAULT ''")
-        except sqlite3.OperationalError: pass
 
         # 3. Bảng quản trị viên
         c.execute('''CREATE TABLE IF NOT EXISTS quan_tri_vien (
@@ -338,16 +328,15 @@ if menu == "🕒 Chấm công đi làm":
                 c_left, c_right = st.columns([1, 2.2])
                 with c_left:
                     col_in, col_out = st.columns(2)
-                    if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", disabled=(has_in or has_off)):
-                        with sqlite3.connect("data.db") as conn:
-                            conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Vào làm", user))
+                    if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", disabled=(has_in or has_off)):                       
+                        read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Vào làm", user))
                         st.toast("✅ Đã ghi nhận giờ vào")
                         time.sleep(1)
                         st.rerun()
                         
                     if col_out.button("🏁 RA VỀ", use_container_width=True, disabled=(not has_in or has_out or has_off)):
                         with sqlite3.connect("data.db") as conn:
-                            conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Ra về", user))
+                            read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Ra về", user))
                         st.toast("🏁 Đã ghi nhận giờ ra")
                         time.sleep(1)
                         st.rerun()
@@ -361,8 +350,7 @@ if menu == "🕒 Chấm công đi làm":
                             if st.button("Xác nhận nghỉ", use_container_width=True, type="secondary"):
                                 if not reason_off: st.error("Vui lòng nhập lý do")
                                 else:
-                                    with sqlite3.connect("data.db") as conn:
-                                        conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, ghi_chu, nguoi_thao_tac) VALUES (?,?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"Nghỉ {type_off}", reason_off, user))
+                                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, ghi_chu, nguoi_thao_tac) VALUES (?,?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"Nghỉ {type_off}", reason_off, user))
                                     st.success("Đã gửi đăng ký nghỉ")
                                     time.sleep(1)
                                     st.rerun()
@@ -447,19 +435,17 @@ if menu == "🕒 Chấm công đi làm":
                 b1, b2, b3 = st.columns([1, 1, 1])
                 
                 if b1.button("✅ Gán 1 Ngày công", use_container_width=True):
-                    with sqlite3.connect("data.db") as conn:
-                        conn.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
-                        conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
-                        conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 17:30:00", "Ra về", user))
+                    read_sql("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
+                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
+                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 17:30:00", "Ra về", user))
                     st.success("🎯 Đã gán 1 ngày công thành công")
                     time.sleep(1)
                     st.rerun()
                 
                 if b2.button("🌗 Gán 1/2 Ngày công", use_container_width=True):
-                    with sqlite3.connect("data.db") as conn:
-                        conn.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
-                        conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
-                        conn.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 12:00:00", "Ra về", user))
+                    read_sql("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
+                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
+                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 12:00:00", "Ra về", user))
                     st.success("🎯 Đã gán 1/2 ngày công thành công")
                     time.sleep(1)
                     st.rerun()
@@ -607,8 +593,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         with open(img_path, "wb") as f: 
                             f.write(uploaded_file.getbuffer())
 
-                        with sqlite3.connect("data.db") as conn:
-                            conn.execute("""INSERT INTO cham_cong (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
+                        read_sql("""INSERT INTO cham_cong (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
                                 VALUES (?,?,?,?,?,?,?,?,?)""", 
                                 (target_user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), so_hd, noi_dung_final, 
                                  quang_duong, tong_combo, tong_tien, img_path, 'Chờ duyệt'))
@@ -729,31 +714,42 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             column_config={
                                 "Thời Gian": st.column_config.DatetimeColumn("Thời gian", format="DD/MM/YYYY HH:mm"),
                                 "Thành tiền": st.column_config.NumberColumn("Thành tiền", format="%d VNĐ"),
+                                # Tăng độ rộng và cho phép xuống dòng cho cột địa chỉ
+                                "Địa chỉ": st.column_config.TextColumn(
+                                    "📍 Địa chỉ lắp đặt", 
+                                    width="medium", # Các mức: "small", "medium", "large" hoặc số pixel (vd: 300)
+                                    help="Thông tin chi tiết địa chỉ và thiết bị"),
                             }
                         )
 
-                        # 3. SỬA ĐƠN (USER TỰ SỬA KHI CHƯA DUYỆT)
+                        # --- 3. SỬA ĐƠN (USER TỰ SỬA KHI CHƯA DUYỆT) ---
                         if role not in ["Admin", "System Admin", "Manager"]:
                             st.divider()
                             st.subheader("🛠️ Chỉnh sửa đơn lắp đặt (Đơn chờ duyệt)")
                             
-                            # Lọc danh sách đơn có thể sửa (Chỉ đơn Chờ duyệt)
+                            # Lọc danh sách đơn Chờ duyệt của chính user đó
                             df_edit = df_display[df_display["Trạng thái"] == "Chờ duyệt"]
                             
                             if df_edit.empty:
                                 st.info("ℹ️ Không có đơn hàng nào của bạn ở trạng thái chờ duyệt.")
                             else:
                                 sel_hd_edit = st.selectbox("🎯 Chọn Số HĐ cần sửa:", df_edit["Số HĐ"].tolist())
-                                # Lấy thông tin dòng hiện tại từ DB
                                 row_id = int(df_edit[df_edit["Số HĐ"] == sel_hd_edit]["id"].iloc[0])
                                 
                                 with sqlite3.connect("data.db") as conn:
                                     curr_row = pd.read_sql("SELECT * FROM cham_cong WHERE id = ?", conn, params=(row_id,)).iloc[0]
 
-                                # Phân tách lại số lượng máy từ cột noi_dung (nếu cần) hoặc dựa trên cột combo
-                                # Ở đây ta sẽ hiển thị form nhập mới hoàn toàn để tính lại tiền
+                                # Form chỉnh sửa
                                 with st.form(key=f"edit_form_{row_id}"):
                                     st.caption(f"Đang hiệu chỉnh đơn: {sel_hd_edit}")
+                                    
+                                    # --- CHỨC NĂNG MỚI: UP LẠI ẢNH ---
+                                    st.markdown("**🖼️ Hình ảnh hóa đơn hiện tại:**")
+                                    if curr_row['hinh_anh'] and os.path.exists(curr_row['hinh_anh']):
+                                        st.image(curr_row['hinh_anh'], width=200)
+                                    
+                                    n_uploaded_file = st.file_uploader("🆕 Chọn ảnh mới nếu muốn thay đổi (Để trống nếu giữ nguyên)", type=["jpg", "png", "jpeg"])
+                                    
                                     c1, c2 = st.columns(2)
                                     n_hd_in = c1.text_input("📝 Số hóa đơn *", value=str(curr_row['so_hoa_don']))
                                     n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=int(curr_row['quang_duong']))
@@ -761,11 +757,9 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     st.write("---")
                                     st.markdown("**📦 Cập nhật số lượng thiết bị:**")
                                     m1, m2 = st.columns(2)
-                                    # Mặc định để 0 vì DB bản cũ chưa tách cột máy lớn/nhỏ riêng biệt
                                     n_combo_may_lon = m1.number_input("🤖 Máy lớn (200k/máy)", min_value=0, step=1, value=0)
                                     n_combo_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1, value=0)
                                     
-                                    # Tách lấy phần địa chỉ (bỏ phần máy cũ trong chuỗi)
                                     dia_chi_cu = str(curr_row['noi_dung']).split(" | ")[0]
                                     n_noi_dung = st.text_area("📍 Địa chỉ / Ghi chú mới *", value=dia_chi_cu, height=100)
                                     
@@ -775,7 +769,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         elif n_combo_may_lon == 0 and n_combo_may_nho == 0:
                                             st.error("❌ Vui lòng nhập ít nhất 1 loại máy!")
                                         else:
-                                            # --- RE-LOGIC TÍNH TOÁN (Y HỆT TAB 1) ---
+                                            # --- LOGIC TÍNH TOÁN (Y HỆT TAB 1) ---
                                             if n_quang_duong <= 50:
                                                 n_don_gia_km = 30000 if n_quang_duong < 20 else \
                                                             50000 if n_quang_duong <= 30 else \
@@ -783,13 +777,23 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                             else:
                                                 n_don_gia_km = 80000 + (n_quang_duong - 50) * 5000
 
-                                            n_tien_may_lon = n_combo_may_lon * 200000
-                                            n_tien_may_nho = n_combo_may_nho * n_don_gia_km
-                                            n_tong_tien = n_tien_may_lon + n_tien_may_nho
-                                            
+                                            n_tong_tien = (n_combo_may_lon * 200000) + (n_combo_may_nho * n_don_gia_km)
                                             n_tong_combo = n_combo_may_lon + n_combo_may_nho
-                                            n_noi_dung_final = f"{n_noi_dung} | (Máy lớn: {n_combo_may_lon}, Máy nhỏ(hoặc vật tư #): {n_combo_may_nho})"
+                                            n_noi_dung_final = f"{n_noi_dung} | (Máy lớn: {n_combo_may_lon}, Máy nhỏ: {n_combo_may_nho})"
                                             
+                                            # --- XỬ LÝ ẢNH MỚI ---
+                                            final_img_path = curr_row['hinh_anh'] # Mặc định giữ đường dẫn cũ
+                                            if n_uploaded_file is not None:
+                                                # Tạo đường dẫn mới để tránh trùng lặp/cache
+                                                new_img_path = f"saved_images/{n_hd_in.upper().strip()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                                                with open(new_img_path, "wb") as f:
+                                                    f.write(n_uploaded_file.getbuffer())
+                                                # Xóa ảnh cũ nếu tồn tại để tiết kiệm dung lượng
+                                                if final_img_path and os.path.exists(final_img_path):
+                                                    try: os.remove(final_img_path)
+                                                    except: pass
+                                                final_img_path = new_img_path
+
                                             try:
                                                 with sqlite3.connect("data.db") as conn:
                                                     conn.execute("""
@@ -798,11 +802,12 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                                             noi_dung = ?, 
                                                             quang_duong = ?, 
                                                             combo = ?, 
-                                                            thanh_tien = ? 
+                                                            thanh_tien = ?,
+                                                            hinh_anh = ?
                                                         WHERE id = ? AND trang_thai = 'Chờ duyệt'
                                                     """, (n_hd_in.upper().strip(), n_noi_dung_final, n_quang_duong, 
-                                                        n_tong_combo, n_tong_tien, row_id))
-                                                st.success(f"✅ Đã cập nhật đơn {n_hd_in}! Tổng tiền mới: {n_tong_tien:,.0f} VNĐ")
+                                                        n_tong_combo, n_tong_tien, final_img_path, row_id))
+                                                st.success(f"✅ Đã cập nhật thành công!")
                                                 time.sleep(1)
                                                 st.rerun()
                                             except Exception as e:
@@ -973,14 +978,13 @@ elif menu == "⚙️ Quản trị hệ thống":
                             st.error("❌ Thiếu thông tin bắt buộc!")
                         else:
                             try:
-                                with sqlite3.connect("data.db") as conn:
-                                    check = pd.read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
-                                    if not check.empty:
-                                        st.error(f"❌ Tài khoản {n_u} đã tồn tại!")
-                                    else:
-                                        conn.execute("""INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
+                                check = read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
+                                if not check.empty:
+                                    st.error(f"❌ Tài khoản {n_u} đã tồn tại!")
+                                else:
+                                    read_sql("""INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
                                                      VALUES (?,?,?,?,?,?)""", (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
-                                        st.success("✅ Tạo tài khoản thành công!"); time.sleep(1); st.rerun()
+                                    st.success("✅ Tạo tài khoản thành công!"); time.sleep(1); st.rerun()
                             except Exception as e: st.error(f"Lỗi: {e}")
 
             st.divider()

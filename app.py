@@ -10,6 +10,13 @@ import io
 import re
 import base64
 
+
+st.set_page_config(
+    page_title="Chấm Công Đại Thành",
+    page_icon="favicon.ico",
+    layout="wide",
+)
+
 # ==============================================================================
 # 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE (PERFORMANCE PATCH)
 # ==============================================================================

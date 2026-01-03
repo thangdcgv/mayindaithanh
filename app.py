@@ -10,17 +10,6 @@ import io
 import re
 import base64
 
-
-st.set_page_config(
-    page_title="Chấm Công Đại Thành",
-    page_icon="favicon.ico",
-    layout="wide",
-)
-
-import base64
-import os
-import time
-
 # 1. Hàm chuyển đổi
 def get_base64_of_bin_file(bin_file):
     with open(bin_file, 'rb') as f:

@@ -329,33 +329,67 @@ if menu == "🕒 Chấm công đi làm":
                 c_left, c_right = st.columns([1, 2.2])
                 with c_left:
                     col_in, col_out = st.columns(2)
-                    if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", disabled=(has_in or has_off)):                       
-                        read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Vào làm", user))
-                        st.toast("✅ Đã ghi nhận giờ vào")
-                        time.sleep(1)
-                        st.rerun()
-                        
-                    if col_out.button("🏁 RA VỀ", use_container_width=True, disabled=(not has_in or has_out or has_off)):
-                        with sqlite3.connect("data.db") as conn:
-                            read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Ra về", user))
-                        st.toast("🏁 Đã ghi nhận giờ ra")
-                        time.sleep(1)
-                        st.rerun()
 
+                    # --- NÚT VÀO LÀM ---
+                    if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", disabled=(has_in or has_off)):                       
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("""
+                                INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) 
+                                VALUES (?,?,?,?)
+                            """, (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Vào làm", user))
+                            conn.commit() # Quan trọng nhất
+                            
+                            st.toast("✅ Đã ghi nhận giờ vào")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Lỗi: {e}")
+
+                    # --- NÚT RA VỀ ---
+                    if col_out.button("🏁 RA VỀ", use_container_width=True, disabled=(not has_in or has_out or has_off)):
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("""
+                                INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) 
+                                VALUES (?,?,?,?)
+                            """, (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Ra về", user))
+                            conn.commit()
+                            
+                            st.toast("🏁 Đã ghi nhận giờ ra")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Lỗi: {e}")
+
+                    # --- ĐĂNG KÝ NGHỈ ---
                     with st.expander("🛌 Đăng ký nghỉ hôm nay", expanded=False):
-                        if has_off: st.warning("Bạn đã đăng ký nghỉ hôm nay")
-                        elif has_in: st.error("Đã chấm công vào làm, không thể đăng ký nghỉ")
+                        if has_off: 
+                            st.warning("Bạn đã đăng ký nghỉ hôm nay")
+                        elif has_in: 
+                            st.error("Đã chấm công vào làm, không thể đăng ký nghỉ")
                         else:
                             type_off = st.selectbox("Loại nghỉ", ["Có phép", "Không phép"], key="type_off")
                             reason_off = st.text_input("Lý do nghỉ", placeholder="Nhập lý do cụ thể...")
+                            
                             if st.button("Xác nhận nghỉ", use_container_width=True, type="secondary"):
-                                if not reason_off: st.error("Vui lòng nhập lý do")
+                                if not reason_off: 
+                                    st.error("Vui lòng nhập lý do")
                                 else:
-                                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, ghi_chu, nguoi_thao_tac) VALUES (?,?,?,?,?)", (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"Nghỉ {type_off}", reason_off, user))
-                                    st.success("Đã gửi đăng ký nghỉ")
-                                    time.sleep(1)
-                                    st.rerun()
-                    
+                                    try:
+                                        cur = conn.cursor()
+                                        cur.execute("""
+                                            INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, ghi_chu, nguoi_thao_tac) 
+                                            VALUES (?,?,?,?,?)
+                                        """, (user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"Nghỉ {type_off}", reason_off, user))
+                                        conn.commit()
+                                        
+                                        st.success("Đã gửi đăng ký nghỉ")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Lỗi: {e}")
+
                     show_detail = st.button("📊 Chi tiết chấm công cá nhân", use_container_width=True)
 
                 with c_right:
@@ -398,58 +432,84 @@ if menu == "🕒 Chấm công đi làm":
             st.warning("⚠️ Tài khoản chưa được liên kết thông tin nhân sự.")
 
     # --- TAB 2: QUẢN LÝ & SỬA CÔNG (ADMIN) ---
-    if role in ["Admin", "System Admin"]:
-        with tabs[1]:
-            st.markdown("#### 🛠️ Điều chỉnh công nhân viên")
-            with sqlite3.connect("data.db") as conn:
-                query_nv = "SELECT username, ho_ten FROM quan_tri_vien WHERE role != 'System Admin'"
-                if role == "Admin": query_nv += f" AND username != '{user}'"
-                list_nv = pd.read_sql(query_nv, conn)
-
-            if not list_nv.empty:
-                list_nv['label'] = list_nv['ho_ten'] + " (" + list_nv['username'] + ")"
-                label_to_user = dict(zip(list_nv['label'], list_nv['username']))
+        if role in ["Admin", "System Admin"]:
+            with tabs[1]:
+                st.markdown("#### 🛠️ Điều chỉnh công nhân viên")
                 
-                cl1, cl2 = st.columns(2)
-                sel_label = cl1.selectbox("👤 Chọn nhân viên", options=list_nv['label'].tolist(), key="mgr_sel_user")
-                sel_u = label_to_user.get(sel_label)
-                sel_d = cl2.date_input("📅 Ngày điều chỉnh", datetime.now(), key="mgr_sel_date")
-                d_str = sel_d.strftime("%Y-%m-%d")
-
+                # 1. Lấy danh sách nhân viên để chọn
                 with sqlite3.connect("data.db") as conn:
-                    df_check = pd.read_sql("SELECT thoi_gian, trang_thai_lam, nguoi_thao_tac FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", conn, params=(sel_u, f"{d_str}%"))
+                    query_nv = "SELECT username, ho_ten FROM quan_tri_vien WHERE role != 'System Admin'"
+                    if role == "Admin": 
+                        query_nv += f" AND username != '{user}'"
+                    # Lưu ý: pd.read_sql dùng con=
+                    list_nv = pd.read_sql(query_nv, con=conn)
 
-                c_info, c_action = st.columns([2, 1])
-                if not df_check.empty:
-                    c_info.dataframe(df_check, use_container_width=True, hide_index=True)
-                    if c_action.button("🔥 Reset ngày này", use_container_width=True):
-                        with sqlite3.connect("data.db") as conn: 
-                            conn.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
-                        st.success(f"✅ Đã xóa dữ liệu ngày {d_str}")
+                if not list_nv.empty:
+                    list_nv['label'] = list_nv['ho_ten'] + " (" + list_nv['username'] + ")"
+                    label_to_user = dict(zip(list_nv['label'], list_nv['username']))
+                    
+                    cl1, cl2 = st.columns(2)
+                    sel_label = cl1.selectbox("👤 Chọn nhân viên", options=list_nv['label'].tolist(), key="mgr_sel_user")
+                    sel_u = label_to_user.get(sel_label)
+                    sel_d = cl2.date_input("📅 Ngày điều chỉnh", datetime.now(), key="mgr_sel_date")
+                    d_str = sel_d.strftime("%Y-%m-%d")
+
+                    # 2. Kiểm tra dữ liệu hiện có của ngày đã chọn
+                    with sqlite3.connect("data.db") as conn:
+                        df_check = pd.read_sql(
+                            "SELECT thoi_gian, trang_thai_lam, nguoi_thao_tac FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", 
+                            con=conn, 
+                            params=(sel_u, f"{d_str}%")
+                        )
+
+                    c_info, c_action = st.columns([2, 1])
+                    if not df_check.empty:
+                        c_info.dataframe(df_check, use_container_width=True, hide_index=True)
+                        if c_action.button("🔥 Reset ngày này", use_container_width=True):
+                            with sqlite3.connect("data.db") as conn: 
+                                cur = conn.cursor()
+                                cur.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
+                                conn.commit()
+                            st.success(f"✅ Đã xóa dữ liệu ngày {d_str}")
+                            time.sleep(1)
+                            st.rerun()
+                    else: 
+                        c_info.info(f"ℹ️ Ngày {d_str} không có dữ liệu.")
+
+                    st.divider()
+                    st.markdown("##### 📝 Gán công nhanh")
+                    b1, b2, b3 = st.columns([1, 1, 1])
+                    
+                    # 3. Logic Gán công nhanh (Sửa từ read_sql thành cur.execute)
+                    if b1.button("✅ Gán 1 Ngày công", use_container_width=True):
+                        with sqlite3.connect("data.db") as conn:
+                            cur = conn.cursor()
+                            # Xóa dữ liệu cũ trước khi gán mới
+                            cur.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
+                            # Chèn giờ vào/ra chuẩn
+                            cur.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", 
+                                        (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
+                            cur.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", 
+                                        (sel_u, f"{d_str} 17:30:00", "Ra về", user))
+                            conn.commit()
+                        st.success("🎯 Đã gán 1 ngày công thành công")
                         time.sleep(1)
                         st.rerun()
-                else: 
-                    c_info.info(f"ℹ️ Ngày {d_str} không có dữ liệu.")
-
-                st.divider()
-                st.markdown("##### 📝 Gán công nhanh")
-                b1, b2, b3 = st.columns([1, 1, 1])
-                
-                if b1.button("✅ Gán 1 Ngày công", use_container_width=True):
-                    read_sql("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
-                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
-                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 17:30:00", "Ra về", user))
-                    st.success("🎯 Đã gán 1 ngày công thành công")
-                    time.sleep(1)
-                    st.rerun()
-                
-                if b2.button("🌗 Gán 1/2 Ngày công", use_container_width=True):
-                    read_sql("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
-                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
-                    read_sql("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", (sel_u, f"{d_str} 12:00:00", "Ra về", user))
-                    st.success("🎯 Đã gán 1/2 ngày công thành công")
-                    time.sleep(1)
-                    st.rerun()
+                    
+                    if b2.button("🌗 Gán 1/2 Ngày công", use_container_width=True):
+                        with sqlite3.connect("data.db") as conn:
+                            cur = conn.cursor()
+                            # Xóa dữ liệu cũ
+                            cur.execute("DELETE FROM cham_cong_di_lam WHERE username=? AND thoi_gian LIKE ?", (sel_u, f"{d_str}%"))
+                            # Chèn giờ sáng
+                            cur.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", 
+                                        (sel_u, f"{d_str} 08:00:00", "Vào làm", user))
+                            cur.execute("INSERT INTO cham_cong_di_lam (username, thoi_gian, trang_thai_lam, nguoi_thao_tac) VALUES (?,?,?,?)", 
+                                        (sel_u, f"{d_str} 12:00:00", "Ra về", user))
+                            conn.commit()
+                        st.success("🎯 Đã gán 1/2 ngày công thành công")
+                        time.sleep(1)
+                        st.rerun()
 
     # --- TAB 3: BÁO CÁO TỔNG HỢP (ADMIN) ---
     if role in ["Admin", "System Admin"]:
@@ -590,23 +650,44 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                     img_path = f"saved_images/{so_hd}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
                     
                     try:
-                        # Lưu file ảnh vật lý trước khi ghi DB để tránh lỗi hiển thị
+                        # 1. Lưu file ảnh vật lý
                         with open(img_path, "wb") as f: 
                             f.write(uploaded_file.getbuffer())
 
-                        read_sql("""INSERT INTO cham_cong (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
-                                VALUES (?,?,?,?,?,?,?,?,?)""", 
-                                (target_user, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), so_hd, noi_dung_final, 
-                                 quang_duong, tong_combo, tong_tien, img_path, 'Chờ duyệt'))
+                        # 2. Ghi vào Database (Sửa từ read_sql thành cursor.execute)
+                        cur = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO cham_cong 
+                            (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            target_user, 
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                            so_hd, 
+                            noi_dung_final, 
+                            quang_duong, 
+                            tong_combo, 
+                            tong_tien, 
+                            img_path, 
+                            'Chờ duyệt'
+                        ))
+                        
+                        # 3. Quan trọng: Xác nhận lưu dữ liệu
+                        conn.commit()
                             
                         st.success(f"✅ Đã gửi đơn! (Tổng tiền: {tong_tien:,.0f} VNĐ)")
                         st.session_state["f_up_key"] += 1
                         time.sleep(1)
                         st.rerun()
+
                     except sqlite3.IntegrityError:
-                        if os.path.exists(img_path): os.remove(img_path)
+                        # Nếu trùng số hóa đơn, xóa ảnh đã lưu để tránh rác bộ nhớ
+                        if os.path.exists(img_path): 
+                            os.remove(img_path)
                         st.error(f"❌ Số hóa đơn **{so_hd}** đã tồn tại!")
                     except Exception as e:
+                        if os.path.exists(img_path): 
+                            os.remove(img_path)
                         st.error(f"❌ Lỗi: {e}")
 
    # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
@@ -1087,16 +1168,33 @@ elif menu == "⚙️ Quản trị hệ thống":
                             st.error("❌ Thiếu thông tin bắt buộc!")
                         else:
                             try:
-                                check = read_sql("SELECT username FROM quan_tri_vien WHERE username = ?", conn, params=(n_u,))
+                                # 1. Kiểm tra tài khoản đã tồn tại chưa (Dùng pd.read_sql đúng cú pháp)
+                                check = pd.read_sql(
+                                    "SELECT username FROM quan_tri_vien WHERE username = ?", 
+                                    con=conn, 
+                                    params=(n_u,)
+                                )
+                                
                                 if not check.empty:
                                     st.error(f"❌ Tài khoản {n_u} đã tồn tại!")
                                 else:
-                                    read_sql("""INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
-                                                     VALUES (?,?,?,?,?,?)""", (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
-                                    st.success("✅ Tạo tài khoản thành công!"); time.sleep(1); st.rerun()
-                            except Exception as e: st.error(f"Lỗi: {e}")
+                                    # 2. Thực hiện thêm tài khoản mới bằng Cursor (Không dùng read_sql để INSERT)
+                                    cur = conn.cursor()
+                                    cur.execute("""
+                                        INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh, so_dien_thoai) 
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                    """, (n_u, hash_password(n_p), n_r, n_ten, n_cd, n_phone))
+                                    
+                                    # Xác nhận thay đổi vào Database
+                                    conn.commit()
+                                    
+                                    st.success("✅ Tạo tài khoản thành công!")
+                                    time.sleep(1)
+                                    st.rerun()
+                            except Exception as e: 
+                                st.error(f"Lỗi: {e}")
 
-            st.divider()
+                        st.divider()
 
             # --- 3. XÓA TÀI KHOẢN (CÓ CƠ CHẾ BẢO VỆ SYSADMIN) ---
             with st.expander("🗑️ Quản lý xóa tài khoản"):

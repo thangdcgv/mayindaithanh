@@ -17,6 +17,36 @@ st.set_page_config(
     layout="wide",
 )
 
+# 1. Hàm chuyển đổi ảnh sang chuỗi Base64
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+logo_filename = "favicon.ico"  
+
+# 3. Xử lý logic chèn HTML
+try:
+    if os.path.exists(logo_filename):
+        img_base = get_base64_of_bin_file(logo_filename)
+        
+        # Chèn đoạn mã HTML vào <head> để đổi icon khi Add to Home Screen
+        st.markdown(
+            f"""
+            <head>
+                <link rel="apple-touch-icon" href="data:image/png;base64,{img_base}">
+                <link rel="icon" type="image/png" href="data:image/png;base64,{img_base}">
+                <meta name="apple-mobile-web-app-capable" content="yes">
+                <meta name="apple-mobile-web-app-title" content="Chấm công">
+            </head>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        # Nếu chưa có file logo, có thể dùng emoji làm icon tạm thời cho trình duyệt
+        st.set_page_config(page_icon="📊", layout="wide")
+except Exception as e:
+    pass
 # ==============================================================================
 # 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE (PERFORMANCE PATCH)
 # ==============================================================================

@@ -10,28 +10,7 @@ import io
 import re
 import base64
 
-# 1. Hàm chuyển đổi
-def get_base64_of_bin_file(bin_file):
-    with open(bin_file, 'rb') as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
 
-logo_file = "logo.png"
-
-if os.path.exists(logo_file):
-    img_base64 = get_base64_of_bin_file(logo_file)
-    # Tạo một mã version dựa trên thời gian để ép trình duyệt nhận mới
-    ver = str(int(time.time())) 
-    
-    st.markdown(
-        f"""
-        <link rel="icon" type="image/png" href="data:image/png;base64,{img_base64}?v={ver}">
-        <link rel="apple-touch-icon" href="data:image/png;base64,{img_base64}?v={ver}">
-        <meta name="apple-mobile-web-app-capable" content="yes">
-        <meta name="apple-mobile-web-app-status-bar-style" content="default">
-        """,
-        unsafe_allow_html=True
-    )
 # ==============================================================================
 # 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE (PERFORMANCE PATCH)
 # ==============================================================================
@@ -671,16 +650,15 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 st.warning("⚠️ Không tìm thấy hình ảnh.")
 
     # --- TAB 3 (TAB CUỐI): BÁO CÁO LẮP ĐẶT ---
-    # Dùng tabs[-1] để tự động thích ứng với cả User (tab index 1) và Admin (tab index 2)
     with tabs[-1]:
-        with sqlite3.connect("data.db") as conn:
-            query = """
-                SELECT c.id, q.ho_ten AS 'Tên', c.ten AS 'username', c.thoi_gian AS 'Thời Gian',
-                    c.so_hoa_don AS 'Số HĐ', c.noi_dung AS 'Địa chỉ', c.quang_duong AS 'Km', c.combo,
-                    c.thanh_tien AS 'Thành tiền', c.trang_thai AS 'Trạng thái', c.ghi_chu_duyet AS 'Lý do'
-                FROM cham_cong AS c LEFT JOIN quan_tri_vien AS q ON c.ten = q.username
-            """
-            df_raw = pd.read_sql(query, conn)
+        conn = get_conn()
+        query = """
+            SELECT c.id, q.ho_ten AS 'Tên', c.ten AS 'username', c.thoi_gian AS 'Thời Gian',
+                c.so_hoa_don AS 'Số HĐ', c.noi_dung AS 'Địa chỉ', c.quang_duong AS 'Km', c.combo,
+                c.thanh_tien AS 'Thành tiền', c.trang_thai AS 'Trạng thái', c.ghi_chu_duyet AS 'Lý do'
+            FROM cham_cong AS c LEFT JOIN quan_tri_vien AS q ON c.ten = q.username
+        """
+        df_raw = pd.read_sql(query, conn)
 
         if df_raw.empty:
             st.info("📭 Chưa có dữ liệu đơn hàng.")
@@ -706,7 +684,29 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                 st.subheader("📄 Chi tiết đơn")
                 col_f1, col_f2, col_f3 = st.columns(3)
-                d_range = col_f1.date_input("📅 Thời gian", value=[date.today().replace(day=1), date.today()])
+                
+                # --- PHẦN LOGIC MỚI: BỘ LỌC THỜI GIAN ---
+                if role in ["Admin", "System Admin"]:
+                    # Tạo danh sách 12 tháng gần nhất
+                    curr_date = date.today()
+                    month_opts = []
+                    for i in range(12):
+                        m_date = (curr_date.replace(day=1) - pd.DateOffset(months=i))
+                        month_opts.append(m_date.strftime("%m/%Y"))
+                    
+                    sel_month = col_f1.selectbox("📅 Chọn tháng báo cáo", month_opts)
+                    
+                    # Chuyển đổi tháng chọn thành dải ngày để mask
+                    sel_dt = datetime.strptime(sel_month, "%m/%Y")
+                    start_d = sel_dt.date().replace(day=1)
+                    import calendar
+                    last_day = calendar.monthrange(sel_dt.year, sel_dt.month)[1]
+                    end_d = sel_dt.date().replace(day=last_day)
+                    d_range = [start_d, end_d]
+                else:
+                    # User thường vẫn chọn dải ngày tự do
+                    d_range = col_f1.date_input("📅 Khoảng thời gian", value=[date.today().replace(day=1), date.today()])
+
                 nv_opts = ["Tất cả"] + sorted(df_all["Tên"].astype(str).unique().tolist())
                 sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, disabled=(role not in ["Admin", "System Admin", "Manager"]))
                 sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
@@ -725,22 +725,109 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
                         c_met.metric("💰 Doanh thu duyệt", f"{rev_sum:,.0f} VNĐ")
                         
-                        out = io.BytesIO()
-                        with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-                            df_display.drop(columns=["id", "username"]).to_excel(writer, index=False)
-                        c_exp.download_button("📥 Tải Excel", out.getvalue(), "BaoCao.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        # --- XỬ LÝ XUẤT EXCEL CHI TIẾT THEO MẪU CẬP NHẬT ---
+                        if not df_display.empty:
+                            out = io.BytesIO()
+                            
+                            # 1. Chuẩn bị dữ liệu bảng chính
+                            df_export = df_display.sort_values("Thời Gian").copy()
+                            df_export.insert(0, 'STT', range(1, len(df_export) + 1))
+                            
+                            # Yêu cầu 1: Cột ngày hiển thị dd/mm/yyyy
+                            df_export['Ngày'] = df_export['Thời Gian'].dt.strftime('%d/%m/%Y')
+                            
+                            # YÊU CẦU MỚI: Tách cột Máy và Km riêng biệt
+                            df_export['Máy'] = df_export['combo'].fillna("")
+                            df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "")
 
+                            # Mapping các cột đúng theo form mới (đã tách Máy và Km)
+                            df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Lý do', 'Trạng thái']]
+                            df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Máy', 'Km', 'Ghi chú', 'Tình trạng']
+
+                            # 2. Chuẩn bị dữ liệu bảng phụ (Chỉ tính đơn Đã duyệt)
+                            df_approved = df_display[df_display['Trạng thái'] == 'Đã duyệt'].copy()
+                            if not df_approved.empty:
+                                df_summary = df_approved.groupby("Tên").agg(
+                                    Tong_Don=("Số HĐ", "count"),
+                                    Tong_Cong=("Thành tiền", "sum") 
+                                ).reset_index()
+                            else:
+                                df_summary = pd.DataFrame(columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
+                                
+                            df_summary.columns = ['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
+                            total_row = pd.DataFrame([['Tổng', df_summary['Tổng ĐƠN'].sum(), df_summary['Tổng CÔNG'].sum()]], 
+                                                    columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
+                            df_summary = pd.concat([df_summary, total_row], ignore_index=True)
+
+                            with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+                                df_main.to_excel(writer, index=False, sheet_name="BaoCao", startrow=3)
+                                wb = writer.book
+                                ws = writer.sheets['BaoCao']
+                                
+                                # --- FORMATS ---
+                                title_fmt = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#92D050', 'border': 1})
+                                header_fmt = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#00B050', 'font_color': 'white', 'border': 1})
+                                cell_fmt = wb.add_format({'border': 1, 'valign': 'vcenter'})
+                                center_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+                                note_box_fmt = wb.add_format({'border': 1, 'bg_color': '#EBF1DE', 'text_wrap': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 10})
+                                status_fmt = wb.add_format({'border': 1, 'align': 'center', 'bold': True})
+
+                                # --- VẼ BẢNG CHÍNH ---
+                                label = sel_month if role in ["Admin", "System Admin"] else f"{d_range[0]} - {d_range[1]}"
+                                # Gộp ô tiêu đề từ A đến H (vì có thêm 1 cột do tách Máy/Km)
+                                ws.merge_range('A1:H2', f'BẢNG CHẤM CÔNG GIAO HÀNG - LẮP ĐẶT THÁNG {label}', title_fmt)
+                                
+                                for col_num, value in enumerate(df_main.columns.values):
+                                    ws.write(3, col_num, value, header_fmt)
+                                
+                                ws.set_column('A:A', 5, center_fmt)    # STT
+                                ws.set_column('B:B', 12, center_fmt)   # Ngày
+                                ws.set_column('C:C', 30, cell_fmt)     # Địa chỉ (đã thu hẹp)
+                                ws.set_column('D:D', 25, center_fmt)   # Nhân viên (đã mở rộng)
+                                ws.set_column('E:E', 15, center_fmt)   # Cột Máy
+                                ws.set_column('F:F', 10, center_fmt)   # Cột Km
+                                ws.set_column('G:G', 20, cell_fmt)     # Ghi chú
+                                ws.set_column('H:H', 12, status_fmt)   # Tình trạng
+
+                                # --- VẼ GHI CHÚ CÁCH TÍNH TIỀN (Phía trên bảng phụ) ---
+                                summary_start_col = 10 # Dời sang cột K để không đè bảng chính đã tách cột
+                                note_text = (
+                                    "Phụ cấp 30k/ máy đối với đơn đi từ 20km trở xuống\n"
+                                    "Phụ cấp 50k/ máy đối với đơn từ 21km – 30km hoặc máy ép nhiệt khí nén.\n"
+                                    "Phụ cấp 70k/ máy đối với đơn từ 31 – 40km\n"
+                                    "Phụ cấp 80k/ máy đối với đơn từ 41 – 50km. Đối với mỗi km kế tiếp từ 51km +\n"
+                                    "5k/1km vượt mức tính\n"
+                                    "Đối với các máy khổ lớn hoặc đơn tính sẽ tính theo thỏa thuận."
+                                )
+                                ws.merge_range(4, summary_start_col, 9, summary_start_col + 2, note_text, note_box_fmt)
+
+                                # --- VẼ BẢNG PHỤ TỔNG QUÁT ---
+                                summary_row_header = 11
+                                ws.merge_range(summary_row_header, summary_start_col, summary_row_header, summary_start_col + 2, "TỔNG HỢP CÔNG ĐÃ DUYỆT", header_fmt)
+                                
+                                for col_num, value in enumerate(df_summary.columns.values):
+                                    ws.write(summary_row_header + 1, summary_start_col + col_num, value, header_fmt)
+                                    
+                                for row_num, row_data in enumerate(df_summary.values):
+                                    fmt = title_fmt if row_num == len(df_summary) - 1 else center_fmt
+                                    for col_num, cell_value in enumerate(row_data):
+                                        ws.write(summary_row_header + 2 + row_num, summary_start_col + col_num, cell_value, fmt)
+                                
+                                # Định dạng cột cho bảng phụ (Tên nhân viên rộng 25)
+                                ws.set_column(summary_start_col, summary_start_col, 25) 
+                                ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
+
+                            c_exp.download_button("📥 Tải Excel Báo Cáo", out.getvalue(), f"Bao_Cao_{label.replace('/','_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                        # --- 3. HIỂN THỊ BẢNG TRÊN GIAO DIỆN APP (Vẫn giữ nguyên) ---
                         st.dataframe(
                             df_display.drop(columns=["username", "id"]),
-                            use_container_width=True, hide_index=True,
+                            use_container_width=True, 
+                            hide_index=True,
                             column_config={
                                 "Thời Gian": st.column_config.DatetimeColumn("Thời gian", format="DD/MM/YYYY HH:mm"),
                                 "Thành tiền": st.column_config.NumberColumn("Thành tiền", format="%d VNĐ"),
-                                # Tăng độ rộng và cho phép xuống dòng cho cột địa chỉ
-                                "Địa chỉ": st.column_config.TextColumn(
-                                    "📍 Địa chỉ lắp đặt", 
-                                    width="medium", # Các mức: "small", "medium", "large" hoặc số pixel (vd: 300)
-                                    help="Thông tin chi tiết địa chỉ và thiết bị"),
+                                "Địa chỉ": st.column_config.TextColumn("📍 Địa chỉ lắp đặt", width="large")
                             }
                         )
 

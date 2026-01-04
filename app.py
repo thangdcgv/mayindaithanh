@@ -9,10 +9,17 @@ import time  # Quan trọng: Dùng để delay thông báo trước khi rerun
 import io
 import re
 import base64
+import uuid
+from PIL import Image # Cần cài đặt: pip install Pillow
+from pathlib import Path
 
-
+st.set_page_config(
+    page_title="Chấm công", 
+    page_icon="🤖", 
+    layout="wide"
+)
 # ==============================================================================
-# 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE (PERFORMANCE PATCH)
+# 1. HÀM HỆ THỐNG & TỐI ƯU DATABASE 
 # ==============================================================================
 
 @st.cache_resource
@@ -84,7 +91,7 @@ def init_db():
         if cursor.fetchone()[0] == 0:
             try:
                 # Pass mặc định: admin123
-                h_pass = hashlib.sha256("admin123".encode()).hexdigest()
+                h_pass = hashlib.sha256("270197".encode()).hexdigest()
                 c.execute("""INSERT INTO quan_tri_vien 
                              (username, password, role, ho_ten, chuc_danh, ngay_sinh, so_dien_thoai, dia_chi) 
                              VALUES ('admin', ?, 'System Admin', 'Quản Trị Viên', 'Hệ Thống', '1993-12-26', '0931334450', 'Hệ thống')""", 
@@ -93,12 +100,9 @@ def init_db():
             
         conn.commit()
     
-    if not os.path.exists("saved_images"): 
-        os.makedirs("saved_images")
-    
+    Path("saved_images").mkdir(parents=True, exist_ok=True)   
 # Gọi hàm tạo index ngay sau khi init DB
 create_indexes()
-
 # Gọi hàm khởi tạo
 init_db()
 
@@ -573,33 +577,26 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             ten_nguoi_thao_tac = res_me.iloc[0]['ho_ten'] if not res_me.empty else user
 
         # --- PHẦN PHÂN QUYỀN CHỌN NHÂN VIÊN ---
+        # Giữ nguyên logic lấy target_user từ username của bạn
         target_user = user
         is_management = role in ["Manager", "Admin", "System Admin"]
         
         if is_management:
             with sqlite3.connect("data.db") as conn:
-                # LỌC: Chỉ lấy những người có quyền 'User' hoặc 'Manager' (Bỏ qua Admin và System Admin)
                 if role == "System Admin":
-                    # System Admin có thể chấm công thay cho Admin, Manager và User
-                    # Nhưng theo yêu cầu mới: SysAdmin/Admin không cần chấm công -> Chỉ hiện Manager và User
                     df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role IN ('Manager', 'User') AND username IS NOT NULL", conn)
                 elif role == "Admin":
-                    # Admin chấm công thay cho Manager và User
                     df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role IN ('Manager', 'User') AND username IS NOT NULL", conn)
                 else: # Manager
-                    # Manager chỉ chấm công thay cho User
                     df_nv_list = pd.read_sql("SELECT username, ho_ten FROM quan_tri_vien WHERE role = 'User' AND username IS NOT NULL", conn)
             
             if not df_nv_list.empty:
                 df_nv_list['display'] = df_nv_list['ho_ten'] + " (" + df_nv_list['username'] + ")"
-                
                 if role in ["System Admin", "Admin"]:
-                    # Đối với Admin/SysAdmin: Danh sách chỉ gồm nhân viên cấp dưới (không có tên mình)
                     options = df_nv_list['display'].tolist()
                     sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt cho nhân viên:", options)
                     target_user = df_nv_list[df_nv_list['display'] == sel_nv_display]['username'].values[0]
                 else:
-                    # Đối với Manager: Có thể "Tự chấm công" hoặc chấm cho "User"
                     options = ["Tự chấm công"] + df_nv_list['display'].tolist()
                     sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt thay cho:", options)
                     if sel_nv_display != "Tự chấm công":
@@ -631,64 +628,65 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                 else:
                     so_hd = so_hd_in.upper().strip()
                     
-                    # --- LOGIC TÍNH TOÁN ĐA TẦNG ---
+                    # --- LOGIC TÍNH TOÁN (Giữ nguyên của bạn) ---
                     if quang_duong <= 50:
-                        don_gia_km = 30000 if quang_duong < 20 else \
-                                     50000 if quang_duong <= 30 else \
-                                     70000 if quang_duong <= 40 else 80000
+                        don_gia_km = 30000 if quang_duong < 20 else 50000 if quang_duong <= 30 else 70000 if quang_duong <= 40 else 80000
                     else:
                         don_gia_km = 80000 + (quang_duong - 50) * 5000
-
-                    tien_may_lon = combo_may_lon * 200000
-                    tien_may_nho = combo_may_nho * don_gia_km
-                    tong_tien = tien_may_lon + tien_may_nho
-                    
+                    tong_tien = (combo_may_lon * 200000) + (combo_may_nho * don_gia_km)
                     tong_combo = combo_may_lon + combo_may_nho
-                    noi_dung_final = f"{noi_dung} | (Máy lớn: {combo_may_lon}, Máy nhỏ(hoặc vật tư #): {combo_may_nho})"
+                    noi_dung_final = f"{noi_dung} | (Máy lớn: {combo_may_lon}, Máy nhỏ: {combo_may_nho})"
                     
+                    # --- XỬ LÝ ẢNH CHUYÊN NGHIỆP ---
                     if not os.path.exists("saved_images"): os.makedirs("saved_images")
-                    img_path = f"saved_images/{so_hd}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                    
+                    # Tạo tên file duy nhất (Số HĐ + Thời gian + Mã ngẫu nhiên)
+                    unique_suffix = uuid.uuid4().hex[:6]
+                    filename = f"{so_hd}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{unique_suffix}.jpg"
+                    img_path = os.path.join("saved_images", filename)
                     
                     try:
-                        # 1. Lưu file ảnh vật lý
-                        with open(img_path, "wb") as f: 
-                            f.write(uploaded_file.getbuffer())
-
-                        # 2. Ghi vào Database (Sửa từ read_sql thành cursor.execute)
-                        cur = conn.cursor()
-                        cur.execute("""
-                            INSERT INTO cham_cong 
-                            (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            target_user, 
-                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                            so_hd, 
-                            noi_dung_final, 
-                            quang_duong, 
-                            tong_combo, 
-                            tong_tien, 
-                            img_path, 
-                            'Chờ duyệt'
-                        ))
+                        # 1. Mở ảnh từ bộ nhớ đệm
+                        image = Image.open(uploaded_file)
                         
-                        # 3. Quan trọng: Xác nhận lưu dữ liệu
-                        conn.commit()
-                            
-                        st.success(f"✅ Đã gửi đơn! (Tổng tiền: {tong_tien:,.0f} VNĐ)")
+                        # 2. Chuẩn hóa hệ màu (Chuyển RGBA/PNG có nền trong suốt sang RGB để lưu JPG)
+                        if image.mode in ("RGBA", "P"):
+                            image = image.convert("RGB")
+                        
+                        # 3. Nén ảnh (Giảm dung lượng xuống ~300-500KB mà vẫn rõ nét)
+                        image.save(img_path, "JPEG", quality=75, optimize=True)
+
+                        # 4. Ghi vào Database
+                        with sqlite3.connect("data.db") as conn:
+                            cur = conn.cursor()
+                            cur.execute("""
+                                INSERT INTO cham_cong 
+                                (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                target_user, 
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                                so_hd, 
+                                noi_dung_final, 
+                                quang_duong, 
+                                tong_combo, 
+                                tong_tien, 
+                                img_path, 
+                                'Chờ duyệt'
+                            ))
+                            conn.commit()
+                                
+                        st.success(f"✅ Đã gửi đơn thành công! (Tổng: {tong_tien:,.0f} VNĐ)")
                         st.session_state["f_up_key"] += 1
                         time.sleep(1)
                         st.rerun()
 
                     except sqlite3.IntegrityError:
-                        # Nếu trùng số hóa đơn, xóa ảnh đã lưu để tránh rác bộ nhớ
-                        if os.path.exists(img_path): 
-                            os.remove(img_path)
+                        if os.path.exists(img_path): os.remove(img_path)
                         st.error(f"❌ Số hóa đơn **{so_hd}** đã tồn tại!")
                     except Exception as e:
-                        if os.path.exists(img_path): 
-                            os.remove(img_path)
-                        st.error(f"❌ Lỗi: {e}")
+                        if os.path.exists(img_path): os.remove(img_path)
+                        st.error(f"❌ Lỗi xử lý: {e}")
 
    # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
     if role in ["Admin", "System Admin", "Manager"]:
@@ -972,22 +970,24 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         st.divider()
 
                         # --- DÀNH CHO USER: SỬA HOẶC XÓA ĐƠN ---
-                        if role not in ["Admin", "System Admin", "Manager"]:
+                        if role in ["User", "Manager"]:
                             with st.expander("🛠️ Cập nhật thông tin đơn", expanded=False):
                                 st.markdown("""
                                 **📌 Hướng dẫn trạng thái đơn hàng:**
                                 - 🟡 **Chờ duyệt:** Đơn đã gửi, đang chờ Admin kiểm tra. Bạn có thể **Sửa** hoặc **Xóa**.
                                 - 🔴 **Từ chối:** Đơn sai thông tin. Vui lòng xem lý do và **cập nhật lại**(Không được phép xoá).
-                                - 🟢 **Đã duyệt:** Đơn hợp lệ, đã chốt tiền công. **Không thể chỉnh sửa, admin có thể đảo ngược trạng thái**.
+                                - 🟢 **Đã duyệt:** Đơn hợp lệ, đã chốt tiền công. **Không thể chỉnh sửa**.
                                 ---
                                 """, unsafe_allow_html=True)
-                                # Lọc danh sách đơn: Cho phép sửa 'Chờ duyệt' và 'Từ chối'
-                                df_edit = df_display[df_display["Trạng thái"].isin(["Chờ duyệt", "Từ chối"])]
+                                 
+                                df_edit = df_display[
+                                    (df_display["username"] == user) & 
+                                    (df_display["Trạng thái"].isin(["Chờ duyệt", "Từ chối"]))
+                                ]
                                 
                                 if df_edit.empty:
                                     st.info("ℹ️ Bạn không có đơn hàng nào ở trạng thái Chờ duyệt hoặc Từ chối.")
                                 else:
-                                    # Tạo nhãn hiển thị kèm trạng thái để user dễ phân biệt
                                     df_edit['label'] = df_edit['Số HĐ'] + " (" + df_edit['Trạng thái'] + ")"
                                     sel_label = st.selectbox("🎯 Chọn đơn hàng cần thao tác:", df_edit["label"].tolist())
                                     sel_hd_edit = sel_label.split(" (")[0]
@@ -995,16 +995,15 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     row_data = df_edit[df_edit["Số HĐ"] == sel_hd_edit].iloc[0]
                                     row_id = int(row_data["id"])
                                     current_status = row_data["Trạng thái"]
+                                    old_img_path = row_data.get('hinh_anh') # Lưu đường dẫn cũ để xử lý
 
-                                    # --- NÚT XÓA ĐƠN (Chỉ cho đơn Chờ duyệt) ---
+                                    # --- NÚT XÓA ĐƠN ---
                                     if current_status == "Chờ duyệt":
                                         if st.button("🗑️ XOÁ ĐƠN NÀY", use_container_width=True, type="secondary"):
                                             try:
                                                 with sqlite3.connect("data.db") as conn:
-                                                    # Xóa ảnh vật lý trước
-                                                    img_to_del = row_data.get('hinh_anh')
-                                                    if img_to_del and os.path.exists(img_to_del):
-                                                        os.remove(img_to_del)
+                                                    if old_img_path and os.path.exists(old_img_path):
+                                                        os.remove(old_img_path)
                                                     
                                                     cur = conn.cursor()
                                                     cur.execute("DELETE FROM cham_cong WHERE id = ? AND trang_thai = 'Chờ duyệt'", (row_id,))
@@ -1022,48 +1021,71 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     with st.form(key=f"edit_form_{row_id}", clear_on_submit=True):
                                         st.markdown(f"**📝 Hiệu chỉnh thông tin đơn: {sel_hd_edit}**")
                                         
-                                        # Hiển thị ảnh cũ
-                                        if 'hinh_anh' in row_data and row_data['hinh_anh'] and os.path.exists(row_data['hinh_anh']):
-                                            st.image(row_data['hinh_anh'], width=150, caption="Ảnh hiện tại")
+                                        if old_img_path and os.path.exists(old_img_path):
+                                            st.image(old_img_path, width=150, caption="Ảnh hiện tại")
                                         
+                                        # Input file mới
                                         n_uploaded_file = st.file_uploader("🆕 Đổi ảnh hóa đơn mới (Nếu cần)", type=["jpg", "png", "jpeg"])
                                         
                                         c1, c2 = st.columns(2)
                                         n_hd_in = c1.text_input("📝 Số hóa đơn *", value=str(row_data['Số HĐ']))
-                                        # Giả định lấy giá trị cũ từ nội dung hoặc query thêm nếu cần. Ở đây dùng mặc định từ bảng hiển thị.
-                                        n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=1) 
+                                        n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=int(row_data.get('quang_duong', 0))) 
                                         
                                         m1, m2 = st.columns(2)
                                         n_may_lon = m1.number_input("🤖 Máy lớn", min_value=0, step=1, value=0)
                                         n_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1, value=1)
                                         
-                                        n_noi_dung = st.text_area("📍 Địa chỉ / Ghi chú mới *", value=str(row_data['Địa chỉ']), height=80)
+                                        # Ở đây giả định 'Địa chỉ' là phần text trước dấu |
+                                        raw_address = str(row_data['Địa chỉ']).split(" | (")[0]
+                                        n_noi_dung = st.text_area("📍 Địa chỉ / Ghi chú mới *", value=raw_address, height=80)
                                         
                                         if st.form_submit_button("💾 XÁC NHẬN CẬP NHẬT & GỬI DUYỆT LẠI", use_container_width=True):
-                                            # Logic tính tiền (Mẫu)
-                                            n_don_gia_km = 30000 if n_quang_duong <= 20 else 50000 if n_quang_duong <= 30 else 70000 if n_quang_duong <= 40 else 80000
-                                            if n_quang_duong > 50: n_don_gia_km += (n_quang_duong - 50) * 5000
+                                            # Logic tính tiền đồng nhất với Tab 1
+                                            if n_quang_duong <= 50:
+                                                n_don_gia_km = 30000 if n_quang_duong < 20 else 50000 if n_quang_duong <= 30 else 70000 if n_quang_duong <= 40 else 80000
+                                            else:
+                                                n_don_gia_km = 80000 + (n_quang_duong - 50) * 5000
                                             
                                             n_tong_tien = (n_may_lon * 200000) + (n_may_nho * n_don_gia_km)
                                             n_tong_combo = n_may_lon + n_may_nho
-                                            n_noi_dung_final = f"{n_noi_dung} | (Lớn: {n_may_lon}, Nhỏ: {n_may_nho})"
-                                            
+                                            n_noi_dung_final = f"{n_noi_dung} | (Máy lớn: {n_may_lon}, Máy nhỏ: {n_may_nho})"
+                                            n_img_path = old_img_path # Mặc định giữ ảnh cũ
+                                            thoi_gian_cap_nhat = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             try:
+                                                # XỬ LÝ ẢNH MỚI NẾU CÓ
+                                                if n_uploaded_file:
+                                                    if not os.path.exists("saved_images"): os.makedirs("saved_images")
+                                                    u_suffix = uuid.uuid4().hex[:6]
+                                                    new_filename = f"{n_hd_in.strip().upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{u_suffix}.jpg"
+                                                    n_img_path = os.path.join("saved_images", new_filename)
+                                                    
+                                                    # Chuẩn hóa & Nén ảnh bằng Pillow
+                                                    img_pil = Image.open(n_uploaded_file)
+                                                    if img_pil.mode in ("RGBA", "P"): img_pil = img_pil.convert("RGB")
+                                                    img_pil.save(n_img_path, "JPEG", quality=75, optimize=True)
+                                                    
+                                                    # Xóa ảnh cũ sau khi đã lưu ảnh mới thành công
+                                                    if old_img_path and os.path.exists(old_img_path):
+                                                        os.remove(old_img_path)
+
+                                                # CẬP NHẬT DATABASE
                                                 with sqlite3.connect("data.db") as conn:
                                                     cur = conn.cursor()
-                                                    # Sau khi sửa, trạng thái LUÔN quay về 'Chờ duyệt'
                                                     cur.execute("""
                                                         UPDATE cham_cong 
                                                         SET so_hoa_don = ?, noi_dung = ?, quang_duong = ?, combo = ?, 
-                                                            thanh_tien = ?, trang_thai = 'Chờ duyệt'
+                                                            thanh_tien = ?, hinh_anh = ?, trang_thai = 'Chờ duyệt', thoi_gian = ?
                                                         WHERE id = ?
                                                     """, (n_hd_in.upper().strip(), n_noi_dung_final, n_quang_duong, 
-                                                        n_tong_combo, n_tong_tien, row_id))
+                                                        n_tong_combo, n_tong_tien, n_img_path, thoi_gian_cap_nhat, row_id))
                                                     conn.commit()
+                                                
                                                 st.success("✅ Đã cập nhật và gửi duyệt lại!")
                                                 time.sleep(1)
                                                 st.rerun()
                                             except Exception as e:
+                                                # Nếu lỗi xảy ra khi đã lưu ảnh mới nhưng chưa update DB, xóa ảnh mới để tránh rác
+                                                if n_uploaded_file and os.path.exists(n_img_path): os.remove(n_img_path)
                                                 st.error(f"❌ Lỗi: {e}")
 
                         # --- DÀNH CHO ADMIN: ĐẢO NGƯỢC TRẠNG THÁI ---
@@ -1375,7 +1397,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                         with sqlite3.connect("data.db") as conn:
                             conn.execute("DELETE FROM cham_cong") 
                             conn.execute("DELETE FROM cham_cong_di_lam")
-                            conn.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
+                            #---.execute("DELETE FROM quan_tri_vien WHERE role NOT IN ('System Admin')")
                         st.success("💥 Đã dọn dẹp!"); time.sleep(1); st.rerun()
                     except Exception as e: st.error(f"Lỗi: {e}")         
 

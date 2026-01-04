@@ -123,7 +123,18 @@ def check_login(u, p):
         cur = conn.cursor()
         cur.execute("SELECT role, username, chuc_danh, ho_ten FROM quan_tri_vien WHERE username = ? AND password = ?", (u, h))
         return cur.fetchone()
-
+# Hàm phụ để chuyển đổi ảnh sang Byte (Đặt ở đầu code)
+def process_image_to_blob(uploaded_file):
+    if uploaded_file is not None:
+        img = Image.open(uploaded_file)
+        if img.mode in ("RGBA", "P"): 
+            img = img.convert("RGB")
+        
+        # Nén ảnh để giảm dung lượng Database
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=70, optimize=True) # Quality 70 là mức tối ưu
+        return buf.getvalue() # Đây là dữ liệu BLOB
+    return None
 def get_attendance_report(target_username, filter_month=None):
     """Hàm tính toán công - Đã tối ưu logic"""
     query = "SELECT thoi_gian, trang_thai_lam, ghi_chu FROM cham_cong_di_lam WHERE username=?"
@@ -619,7 +630,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             combo_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1)
             
             noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *", height=100)     
-            
+
             if st.form_submit_button("🚀 GỬI YÊU CẦU DUYỆT ĐƠN", use_container_width=True):
                 if not uploaded_file or not so_hd_in or not noi_dung:
                     st.error("❌ Yêu cầu đầy đủ ảnh hoá đơn, số hoá đơn và địa chỉ!")              
@@ -633,32 +644,30 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         don_gia_km = 30000 if quang_duong < 20 else 50000 if quang_duong <= 30 else 70000 if quang_duong <= 40 else 80000
                     else:
                         don_gia_km = 80000 + (quang_duong - 50) * 5000
+                        
                     tong_tien = (combo_may_lon * 200000) + (combo_may_nho * don_gia_km)
                     tong_combo = combo_may_lon + combo_may_nho
                     noi_dung_final = f"{noi_dung} | (Máy lớn: {combo_may_lon}, Máy nhỏ: {combo_may_nho})"
                     
-                    # --- XỬ LÝ ẢNH CHUYÊN NGHIỆP ---
-                    if not os.path.exists("saved_images"): os.makedirs("saved_images")
-                    
-                    # Tạo tên file duy nhất (Số HĐ + Thời gian + Mã ngẫu nhiên)
-                    unique_suffix = uuid.uuid4().hex[:6]
-                    filename = f"{so_hd}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{unique_suffix}.jpg"
-                    img_path = os.path.join("saved_images", filename)
-                    
+                    # --- XỬ LÝ ẢNH SANG DẠNG BLOB ---
                     try:
                         # 1. Mở ảnh từ bộ nhớ đệm
                         image = Image.open(uploaded_file)
                         
-                        # 2. Chuẩn hóa hệ màu (Chuyển RGBA/PNG có nền trong suốt sang RGB để lưu JPG)
+                        # 2. Chuẩn hóa hệ màu (Chuyển sang RGB để nén JPEG)
                         if image.mode in ("RGBA", "P"):
                             image = image.convert("RGB")
                         
-                        # 3. Nén ảnh (Giảm dung lượng xuống ~300-500KB mà vẫn rõ nét)
-                        image.save(img_path, "JPEG", quality=75, optimize=True)
+                        # 3. Chuyển ảnh thành Bytes (BLOB) thay vì lưu file vật lý
+                        img_byte_arr = io.BytesIO()
+                        # Nén quality 70-75 để Database không quá nặng mà ảnh vẫn rõ
+                        image.save(img_byte_arr, format='JPEG', quality=70, optimize=True)
+                        blob_data = img_byte_arr.getvalue() # Đây là dữ liệu nhị phân để lưu vào SQL
 
                         # 4. Ghi vào Database
                         with sqlite3.connect("data.db") as conn:
                             cur = conn.cursor()
+                            # Cột hinh_anh bây giờ nhận giá trị blob_data
                             cur.execute("""
                                 INSERT INTO cham_cong 
                                 (ten, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, hinh_anh, trang_thai) 
@@ -671,35 +680,41 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 quang_duong, 
                                 tong_combo, 
                                 tong_tien, 
-                                img_path, 
+                                blob_data, # Dữ liệu BLOB
                                 'Chờ duyệt'
                             ))
                             conn.commit()
                                 
-                        st.success(f"✅ Đã gửi đơn thành công! (Tổng: {tong_tien:,.0f} VNĐ)")
+                        st.success(f"✅ Đã gửi đơn thành công! (Ảnh đã lưu vào hệ thống)")
                         st.session_state["f_up_key"] += 1
                         time.sleep(1)
                         st.rerun()
 
                     except sqlite3.IntegrityError:
-                        if os.path.exists(img_path): os.remove(img_path)
                         st.error(f"❌ Số hóa đơn **{so_hd}** đã tồn tại!")
                     except Exception as e:
-                        if os.path.exists(img_path): os.remove(img_path)
                         st.error(f"❌ Lỗi xử lý: {e}")
 
-   # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
+    # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/MANAGER) ---
     if role in ["Admin", "System Admin", "Manager"]:
         with tabs[1]:
             st.markdown("#### 📋 Danh sách đơn chờ duyệt")
             with sqlite3.connect("data.db") as conn:
-                df_p = pd.read_sql("SELECT c.*, q.ho_ten FROM cham_cong c LEFT JOIN quan_tri_vien q ON c.ten = q.username WHERE c.trang_thai='Chờ duyệt' ORDER BY c.thoi_gian DESC", conn)
+                # Lưu ý: Đảm bảo query lấy đúng cột hinh_anh
+                df_p = pd.read_sql("""
+                    SELECT c.*, q.ho_ten 
+                    FROM cham_cong c 
+                    LEFT JOIN quan_tri_vien q ON c.ten = q.username 
+                    WHERE c.trang_thai='Chờ duyệt' 
+                    ORDER BY c.thoi_gian DESC
+                """, conn)
 
             if df_p.empty:
                 st.info("📭 Không có đơn nào chờ duyệt.")
             else:
                 for _, r in df_p.iterrows():
-                    with st.expander(f"📦 HĐ: {r['so_hoa_don']} — 👤 {r['ho_ten']}"):
+                    # Tạo tiêu đề expander bao gồm cả thời gian để dễ phân biệt
+                    with st.expander(f"📦 HĐ: {r['so_hoa_don']} — 👤 {r['ho_ten']} — 🕒 {r['thoi_gian']}"):
                         cl, cr = st.columns([1.5, 1])
                         with cl:
                             st.write(f"**📍 Đ/C:** {r['noi_dung']}")
@@ -707,32 +722,40 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             st.markdown(f"#### 💰: `{r['thanh_tien']:,.0f}` VNĐ")
                             
                             # --- PHÂN QUYỀN THAO TÁC NÚT BẤM ---
-                            if role in ["Admin","System Admin"]:
+                            if role in ["Admin", "System Admin"]:
                                 b1, b2 = st.columns(2)
                                 if b1.button("✅ DUYỆT", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
                                     quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác")
                                     st.rerun()
                                 with b2:
                                     with st.popover("❌ TỪ CHỐI", use_container_width=True):
-                                        reason = st.text_area("Lý do:", key=f"txt_{r['id']}")
-                                        if st.button("Xác nhận", key=f"conf_{r['id']}", use_container_width=True):
-                                            quick_update_status(r["id"], "Từ chối", reason)
-                                            st.rerun()
+                                        reason = st.text_area("Lý do từ chối:", key=f"txt_{r['id']}", placeholder="Nhập lý do sai thông tin...")
+                                        if st.button("Xác nhận từ chối", key=f"conf_{r['id']}", use_container_width=True):
+                                            if reason.strip() == "":
+                                                st.error("Vui lòng nhập lý do!")
+                                            else:
+                                                quick_update_status(r["id"], "Từ chối", reason)
+                                                st.rerun()
                             else:
                                 # Nếu là Manager
-                                st.info("ℹ️ Bạn chỉ có quyền xem thông tin đơn này. Quyền duyệt thuộc về Kế toán.")
+                                st.info("ℹ️ Bạn có quyền xem. Quyền duyệt/từ chối thuộc về Kế toán.")
                                 
                         with cr:
-                            if r["hinh_anh"] and os.path.exists(r["hinh_anh"]):
-                                st.image(r["hinh_anh"], caption=f"Ảnh đối soát HĐ {r['so_hoa_don']}", use_container_width=True)
+                            # KIỂM TRA VÀ HIỂN THỊ ẢNH TỪ BLOB
+                            if r["hinh_anh"]:
+                                try:
+                                    # Với dữ liệu BLOB, Streamlit st.image nhận trực tiếp biến r["hinh_anh"]
+                                    st.image(r["hinh_anh"], caption=f"Ảnh đối soát HĐ {r['so_hoa_don']}", use_container_width=True)
+                                except Exception as e:
+                                    st.error(f"Lỗi hiển thị ảnh: {e}")
                             else:
-                                st.warning("⚠️ Không tìm thấy hình ảnh.")
+                                st.warning("⚠️ Đơn này không có dữ liệu hình ảnh.")
 
     # --- TAB 3 (TAB CUỐI): BÁO CÁO LẮP ĐẶT ---
     with tabs[-1]:
         conn = get_conn()
         query = """
-            SELECT c.id, q.ho_ten AS 'Tên', c.ten AS 'username', c.thoi_gian AS 'Thời Gian',
+            SELECT c.id, q.ho_ten AS 'Tên', c.ten AS 'username', c.thoi_gian AS 'Thời Gian', c.hinh_anh,
                 c.so_hoa_don AS 'Số HĐ', c.noi_dung AS 'Địa chỉ', c.quang_duong AS 'Km', c.combo,
                 c.thanh_tien AS 'Thành tiền', c.trang_thai AS 'Trạng thái', c.ghi_chu_duyet AS 'Lý do'
             FROM cham_cong AS c LEFT JOIN quan_tri_vien AS q ON c.ten = q.username
@@ -761,69 +784,61 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         with c2: st.plotly_chart(px.pie(stats, values="Doanh_thu", names="Tên", title="Doanh thu"), use_container_width=True)
                     st.divider()
 
-                st.subheader("📄 Chi tiết đơn")
-                col_f1, col_f2, col_f3 = st.columns(3)
-                
-                # --- PHẦN LOGIC MỚI: BỘ LỌC THỜI GIAN ---
-                if role in ["Admin", "System Admin"]:
-                    # Tạo danh sách 12 tháng gần nhất
-                    curr_date = date.today()
-                    month_opts = []
-                    for i in range(12):
-                        m_date = (curr_date.replace(day=1) - pd.DateOffset(months=i))
-                        month_opts.append(m_date.strftime("%m/%Y"))
+                # --- 4. BÁO CÁO CHI TIẾT (Bọc trong Expander) ---
+                with st.expander("📊 Tra cứu chi tiết và Xuất báo cáo đơn hàng", expanded=False):
+                    col_f1, col_f2, col_f3 = st.columns(3)
                     
-                    sel_month = col_f1.selectbox("📅 Chọn tháng báo cáo", month_opts)
-                    
-                    # Chuyển đổi tháng chọn thành dải ngày để mask
-                    sel_dt = datetime.strptime(sel_month, "%m/%Y")
-                    start_d = sel_dt.date().replace(day=1)
-                    import calendar
-                    last_day = calendar.monthrange(sel_dt.year, sel_dt.month)[1]
-                    end_d = sel_dt.date().replace(day=last_day)
-                    d_range = [start_d, end_d]
-                else:
-                    # User thường vẫn chọn dải ngày tự do
-                    d_range = col_f1.date_input("📅 Khoảng thời gian", value=[date.today().replace(day=1), date.today()])
-
-                nv_opts = ["Tất cả"] + sorted(df_all["Tên"].astype(str).unique().tolist())
-                sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, disabled=(role not in ["Admin", "System Admin", "Manager"]))
-                sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
-
-                if len(d_range) == 2:
-                    mask = (df_all["Thời Gian"].dt.date >= d_range[0]) & (df_all["Thời Gian"].dt.date <= d_range[1])
-                    if sel_nv != "Tất cả": mask &= df_all["Tên"] == sel_nv
-                    if sel_tt != "Tất cả": mask &= df_all["Trạng thái"] == sel_tt
-                    
-                    df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
-                    
-                    if df_display.empty:
-                        st.info("🔍 Không có dữ liệu.")
-                    else:
-                        c_met, c_exp = st.columns([2, 1])
-                        rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
-                        c_met.metric("💰 Doanh thu duyệt", f"{rev_sum:,.0f} VNĐ")
+                    # --- PHẦN LOGIC: BỘ LỌC THỜI GIAN (Giữ nguyên) ---
+                    if role in ["Admin", "System Admin"]:
+                        # Tạo danh sách 12 tháng gần nhất
+                        curr_date = date.today()
+                        month_opts = []
+                        for i in range(12):
+                            m_date = (curr_date.replace(day=1) - pd.DateOffset(months=i))
+                            month_opts.append(m_date.strftime("%m/%Y"))
                         
-                        # --- XỬ LÝ XUẤT EXCEL CHI TIẾT THEO MẪU CẬP NHẬT ---
-                        if not df_display.empty:
-                            out = io.BytesIO()
+                        sel_month = col_f1.selectbox("📅 Chọn tháng báo cáo", month_opts)
+                        
+                        # Chuyển đổi tháng chọn thành dải ngày để mask
+                        sel_dt = datetime.strptime(sel_month, "%m/%Y")
+                        start_d = sel_dt.date().replace(day=1)
+                        import calendar
+                        last_day = calendar.monthrange(sel_dt.year, sel_dt.month)[1]
+                        end_d = sel_dt.date().replace(day=last_day)
+                        d_range = [start_d, end_d]
+                    else:
+                        # User thường vẫn chọn dải ngày tự do
+                        d_range = col_f1.date_input("📅 Khoảng thời gian", value=[date.today().replace(day=1), date.today()])
+
+                    nv_opts = ["Tất cả"] + sorted(df_all["Tên"].astype(str).unique().tolist())
+                    sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, disabled=(role not in ["Admin", "System Admin", "Manager"]))
+                    sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
+
+                    if len(d_range) == 2:
+                        mask = (df_all["Thời Gian"].dt.date >= d_range[0]) & (df_all["Thời Gian"].dt.date <= d_range[1])
+                        if sel_nv != "Tất cả": mask &= df_all["Tên"] == sel_nv
+                        if sel_tt != "Tất cả": mask &= df_all["Trạng thái"] == sel_tt
+                        
+                        df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
+                        
+                        if df_display.empty:
+                            st.info("🔍 Không có dữ liệu.")
+                        else:
+                            c_met, c_exp = st.columns([2, 1])
+                            rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
+                            c_met.metric("💰 Doanh thu duyệt", f"{rev_sum:,.0f} VNĐ")
                             
-                            # 1. Chuẩn bị dữ liệu bảng chính
+                            # --- XỬ LÝ XUẤT EXCEL CHI TIẾT THEO MẪU (Giữ nguyên logic) ---
+                            out = io.BytesIO()
                             df_export = df_display.sort_values("Thời Gian").copy()
                             df_export.insert(0, 'STT', range(1, len(df_export) + 1))
-                            
-                            # Yêu cầu 1: Cột ngày hiển thị dd/mm/yyyy
                             df_export['Ngày'] = df_export['Thời Gian'].dt.strftime('%d/%m/%Y')
-                            
-                            # YÊU CẦU MỚI: Tách cột Máy và Km riêng biệt
                             df_export['Máy'] = df_export['combo'].fillna("")
                             df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "")
 
-                            # Mapping các cột đúng theo form mới (đã tách Máy và Km)
                             df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Lý do', 'Trạng thái']]
                             df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Máy', 'Km', 'Ghi chú', 'Tình trạng']
 
-                            # 2. Chuẩn bị dữ liệu bảng phụ (Chỉ tính đơn Đã duyệt)
                             df_approved = df_display[df_display['Trạng thái'] == 'Đã duyệt'].copy()
                             if not df_approved.empty:
                                 df_summary = df_approved.groupby("Tên").agg(
@@ -851,36 +866,30 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 note_box_fmt = wb.add_format({'border': 1, 'bg_color': '#EBF1DE', 'text_wrap': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 10})
                                 status_fmt = wb.add_format({'border': 1, 'align': 'center', 'bold': True})
 
-                                # --- VẼ BẢNG CHÍNH ---
                                 label = sel_month if role in ["Admin", "System Admin"] else f"{d_range[0]} - {d_range[1]}"
-                                # Gộp ô tiêu đề từ A đến H (vì có thêm 1 cột do tách Máy/Km)
                                 ws.merge_range('A1:H2', f'BẢNG CHẤM CÔNG GIAO HÀNG - LẮP ĐẶT THÁNG {label}', title_fmt)
                                 
                                 for col_num, value in enumerate(df_main.columns.values):
                                     ws.write(3, col_num, value, header_fmt)
                                 
-                                ws.set_column('A:A', 5, center_fmt)    # STT
-                                ws.set_column('B:B', 12, center_fmt)   # Ngày
-                                ws.set_column('C:C', 30, cell_fmt)     # Địa chỉ (đã thu hẹp)
-                                ws.set_column('D:D', 25, center_fmt)   # Nhân viên (đã mở rộng)
-                                ws.set_column('E:E', 15, center_fmt)   # Cột Máy
-                                ws.set_column('F:F', 10, center_fmt)   # Cột Km
-                                ws.set_column('G:G', 20, cell_fmt)     # Ghi chú
-                                ws.set_column('H:H', 12, status_fmt)   # Tình trạng
+                                ws.set_column('A:A', 5, center_fmt)
+                                ws.set_column('B:B', 12, center_fmt)
+                                ws.set_column('C:C', 30, cell_fmt)
+                                ws.set_column('D:D', 25, center_fmt)
+                                ws.set_column('E:E', 15, center_fmt)
+                                ws.set_column('F:F', 10, center_fmt)
+                                ws.set_column('G:G', 20, cell_fmt)
+                                ws.set_column('H:H', 12, status_fmt)
 
-                                # --- VẼ GHI CHÚ CÁCH TÍNH TIỀN (Phía trên bảng phụ) ---
-                                summary_start_col = 10 # Dời sang cột K để không đè bảng chính đã tách cột
-                                note_text = (
-                                    "Phụ cấp 30k/ máy đối với đơn đi từ 20km trở xuống\n"
-                                    "Phụ cấp 50k/ máy đối với đơn từ 21km – 30km hoặc máy ép nhiệt khí nén.\n"
-                                    "Phụ cấp 70k/ máy đối với đơn từ 31 – 40km\n"
-                                    "Phụ cấp 80k/ máy đối với đơn từ 41 – 50km. Đối với mỗi km kế tiếp từ 51km +\n"
-                                    "5k/1km vượt mức tính\n"
-                                    "Đối với các máy khổ lớn hoặc đơn tính sẽ tính theo thỏa thuận."
-                                )
+                                summary_start_col = 10
+                                note_text = ("Phụ cấp 30k/ máy đối với đơn đi từ 20km trở xuống\n"
+                                            "Phụ cấp 50k/ máy đối với đơn từ 21km – 30km hoặc máy ép nhiệt khí nén.\n"
+                                            "Phụ cấp 70k/ máy đối với đơn từ 31 – 40km\n"
+                                            "Phụ cấp 80k/ máy đối với đơn từ 41 – 50km. Đối với mỗi km kế tiếp từ 51km +\n"
+                                            "5k/1km vượt mức tính\n"
+                                            "Đối với các máy khổ lớn hoặc đơn tính sẽ tính theo thỏa thuận.")
                                 ws.merge_range(4, summary_start_col, 9, summary_start_col + 2, note_text, note_box_fmt)
 
-                                # --- VẼ BẢNG PHỤ TỔNG QUÁT ---
                                 summary_row_header = 11
                                 ws.merge_range(summary_row_header, summary_start_col, summary_row_header, summary_start_col + 2, "TỔNG HỢP CÔNG ĐÃ DUYỆT", header_fmt)
                                 
@@ -892,241 +901,245 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     for col_num, cell_value in enumerate(row_data):
                                         ws.write(summary_row_header + 2 + row_num, summary_start_col + col_num, cell_value, fmt)
                                 
-                                # Định dạng cột cho bảng phụ (Tên nhân viên rộng 25)
                                 ws.set_column(summary_start_col, summary_start_col, 25) 
                                 ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
 
                             c_exp.download_button("📥 Tải Excel Báo Cáo", out.getvalue(), f"Bao_Cao_{label.replace('/','_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-                        # --- 3. XỬ LÝ DỮ LIỆU TRƯỚC KHI HIỂN THỊ ---
-                        if not df_display.empty:
-                            # Tạo bản sao để tránh lỗi SettingWithCopyWarning
+                            # --- 3. HIỂN THỊ BẢNG TRÊN GIAO DIỆN (Giữ nguyên logic gộp cột) ---
                             df_temp = df_display.copy()
-                            
-                            # 1. Chèn cột STT vào đầu bảng
                             if 'STT' not in df_temp.columns:
                                 df_temp.insert(0, 'STT', range(1, len(df_temp) + 1))
                             
-                            # 2. Đảm bảo Thành tiền là kiểu số để định dạng %d hoạt động
+                            df_temp['Chi tiết lắp đặt'] = (
+                                df_temp['Địa chỉ'].astype(str) + " - " + 
+                                df_temp['Km'].astype(str) + "km - " + 
+                                df_temp['combo'].astype(str) + " máy"
+                            )
                             df_temp['Thành tiền'] = pd.to_numeric(df_temp['Thành tiền'], errors='coerce')
 
-                            # --- 3. XỬ LÝ DỮ LIỆU TRƯỚC KHI HIỂN THỊ ---
-                            if not df_display.empty:
-                                # Tạo bản sao để xử lý
-                                df_temp = df_display.copy()
-                                
-                                # 1. Chèn cột STT vào đầu bảng
-                                if 'STT' not in df_temp.columns:
-                                    df_temp.insert(0, 'STT', range(1, len(df_temp) + 1))
-                                
-                                # 2. GỘP CỘT: Địa chỉ - Km - Máy thành cột "Chi tiết lắp đặt"
-                                # Đảm bảo các giá trị được chuyển về chuỗi để cộng chuỗi
-                                df_temp['Chi tiết lắp đặt'] = (
-                                    df_temp['Địa chỉ'].astype(str) + " - " + 
-                                    df_temp['Km'].astype(str) + "km - " + 
-                                    df_temp['combo'].astype(str) + " máy"
-                                )
-                                
-                                # 3. Ép kiểu Thành tiền về dạng số để định dạng %d hoạt động
-                                df_temp['Thành tiền'] = pd.to_numeric(df_temp['Thành tiền'], errors='coerce')
+                            st.markdown("###### *Danh sách đơn hàng")
+                            st.dataframe(
+                                df_temp, 
+                                use_container_width=True, 
+                                hide_index=True,
+                                column_order=(
+                                    "STT", "Tên", "Thời Gian", "Số HĐ", "Chi tiết lắp đặt", 
+                                    "Thành tiền", "Trạng thái", "Lý do", "username"
+                                ),
+                                column_config={
+                                    "STT": st.column_config.NumberColumn("STT", width="small"),
+                                    "Tên": st.column_config.TextColumn("Nhân viên", width="medium"),
+                                    "Thời Gian": st.column_config.DatetimeColumn("Thời gian", format="DD/MM/YYYY HH:mm", width="small"),
+                                    "Số HĐ": st.column_config.TextColumn("Số HĐ", width="small"),
+                                    "Chi tiết lắp đặt": st.column_config.TextColumn("Địa chỉ - Km - Máy", width="medium"),
+                                    "Thành tiền": st.column_config.NumberColumn("Thành tiền", format="%d VNĐ", width="small"),
+                                    "Trạng thái": st.column_config.TextColumn("Trạng thái", width="small"),
+                                    "Lý do": st.column_config.TextColumn("Ghi chú / Lý do", width="medium"),
+                                    "username": st.column_config.TextColumn("Người thao tác", width="small"),
+                                    "id": None, "Địa chỉ": None, "Km": None, "combo": None
+                                }
+                            )
 
-                                # --- 3. HIỂN THỊ BẢNG TRÊN GIAO DIỆN APP ---
-                                st.markdown("### 📊 Chi tiết danh sách đơn hàng")
-                                
-                                st.dataframe(
-                                    df_temp, 
-                                    use_container_width=True, 
-                                    hide_index=True,
-                                    # Cập nhật column_order: Thay 3 cột bằng 1 cột gộp
-                                    column_order=(
-                                        "STT", "Tên", "Thời Gian", "Số HĐ", "Chi tiết lắp đặt", 
-                                        "Thành tiền", "Trạng thái", "Lý do", "username"
-                                    ),
-                                    column_config={
-                                        "STT": st.column_config.NumberColumn("STT", width="small"),
-                                        "Tên": st.column_config.TextColumn("Nhân viên", width="medium"),
-                                        "Thời Gian": st.column_config.DatetimeColumn("Thời gian", format="DD/MM/YYYY HH:mm", width="small"),
-                                        "Số HĐ": st.column_config.TextColumn("Số HĐ", width="small"),
-                                        "Chi tiết lắp đặt": st.column_config.TextColumn("Địa chỉ - Km - Máy", width="medium"),
-                                        "Thành tiền": st.column_config.NumberColumn(
-                                            "Thành tiền", 
-                                            format="%d VNĐ", 
-                                            width="small"
-                                        ),
-                                        "Trạng thái": st.column_config.TextColumn("Trạng thái", width="small"),
-                                        "Lý do": st.column_config.TextColumn("Ghi chú / Lý do", width="medium"),
-                                        "username": st.column_config.TextColumn("Người thao tác", width="small"),
-                                        # Ẩn các cột gốc đã gộp và id
-                                        "id": None,
-                                        "Địa chỉ": None,
-                                        "Km": None,
-                                        "combo": None
-                                    }
-                                )
+                # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
+                st.divider()
+
+                # --- DÀNH CHO USER & MANAGER: SỬA HOẶC XÓA ĐƠN CỦA CHÍNH MÌNH ---
+                if role in ["User", "Manager"]:
+                    with st.expander("🛠️ Cập nhật thông tin đơn", expanded=False):
+                        st.markdown("""
+                        **📌 Hướng dẫn trạng thái đơn hàng:**
+                        - 🟡 **Chờ duyệt:** Đơn đã gửi. Bạn có thể **Sửa** hoặc **Xóa**.
+                        - 🔴 **Từ chối:** Đơn sai thông tin. Vui lòng **cập nhật lại** (Thời gian sẽ được làm mới).
+                        - 🟢 **Đã duyệt:** Đơn hợp lệ. **Không thể chỉnh sửa**.
+                        ---
+                        """, unsafe_allow_html=True)
+                            
+                        # Lọc đơn của chính người dùng
+                        df_edit = df_display[
+                            (df_display["username"] == user) & 
+                            (df_display["Trạng thái"].isin(["Chờ duyệt", "Từ chối"]))
+                        ]
+                        
+                        if df_edit.empty:
+                            st.info("ℹ️ Bạn không có đơn hàng nào ở trạng thái Chờ duyệt hoặc Từ chối.")
+                        else:
+                            df_edit['label'] = df_edit['Số HĐ'] + " (" + df_edit['Trạng thái'] + ")"
+                            sel_label = st.selectbox("🎯 Chọn đơn hàng cần thao tác:", df_edit["label"].tolist())
+                            sel_hd_edit = sel_label.split(" (")[0]
+                            
+                            row_data = df_edit[df_edit["Số HĐ"] == sel_hd_edit].iloc[0]
+                            row_id = int(row_data["id"])
+                            current_status = row_data["Trạng thái"]
+                            
+                            # --- LOGIC TÁCH DỮ LIỆU MÁY LỚN/MÁY NHỎ TỪ NỘI DUNG GỘP ---
+                            # Giả định định dạng: "Địa chỉ... | (Máy lớn: X, Máy nhỏ: Y)"
+                            full_content = str(row_data['Địa chỉ'])
+                            raw_address = full_content.split(" | (")[0]
+                            # 1. Lấy quãng đường: Thử lấy từ cột 'quang_duong' hoặc 'Km' tùy theo cách bạn đặt tên trong df_display
+                            val_quang_duong = 0
+                            if 'quang_duong' in row_data:
+                                val_quang_duong = int(row_data['quang_duong'])
+                            elif 'Km' in row_data:
+                                val_quang_duong = int(row_data['Km'])
+                            current_may_lon = 0
+                            current_may_nho = 0
+                            
+                            if " | (Máy lớn: " in full_content:
+                                try:
+                                    parts = full_content.split(" | (")[1].replace(")", "").split(", ")
+                                    current_may_lon = int(parts[0].split(": ")[1])
+                                    current_may_nho = int(parts[1].split(": ")[1])
+                                except:
+                                    # Nếu có lỗi định dạng cũ, mặc định lấy từ cột combo (nếu combo là tổng)
+                                    current_may_nho = int(row_data.get('combo', 1))
+
+                            # Truy vấn trực tiếp BLOB từ DB để đảm bảo load ảnh tươi nhất
+                            with sqlite3.connect("data.db") as conn:
+                                cur = conn.cursor()
+                                cur.execute("SELECT hinh_anh FROM cham_cong WHERE id = ?", (row_id,))
+                                old_img_blob = cur.fetchone()[0]
+
+                            # --- NÚT XÓA ĐƠN ---
+                            if current_status == "Chờ duyệt":
+                                if st.button("🗑️ XOÁ ĐƠN NÀY", use_container_width=True, type="secondary"):
+                                    try:
+                                        with sqlite3.connect("data.db") as conn:
+                                            cur = conn.cursor()
+                                            cur.execute("DELETE FROM cham_cong WHERE id = ? AND trang_thai = 'Chờ duyệt'", (row_id,))
+                                            conn.commit()
+                                        st.success("✅ Đã xóa đơn thành công!")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Không thể xóa: {e}")
                             else:
-                                st.info("ℹ️ Hiện chưa có dữ liệu báo cáo trong tháng này.")
+                                st.caption("⚠️ Đơn bị từ chối: Hãy cập nhật lại thông tin để gửi duyệt lại.")
 
-                        # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
-                        st.divider()
-
-                        # --- DÀNH CHO USER: SỬA HOẶC XÓA ĐƠN ---
-                        if role in ["User", "Manager"]:
-                            with st.expander("🛠️ Cập nhật thông tin đơn", expanded=False):
-                                st.markdown("""
-                                **📌 Hướng dẫn trạng thái đơn hàng:**
-                                - 🟡 **Chờ duyệt:** Đơn đã gửi, đang chờ Admin kiểm tra. Bạn có thể **Sửa** hoặc **Xóa**.
-                                - 🔴 **Từ chối:** Đơn sai thông tin. Vui lòng xem lý do và **cập nhật lại**(Không được phép xoá).
-                                - 🟢 **Đã duyệt:** Đơn hợp lệ, đã chốt tiền công. **Không thể chỉnh sửa**.
-                                ---
-                                """, unsafe_allow_html=True)
-                                 
-                                df_edit = df_display[
-                                    (df_display["username"] == user) & 
-                                    (df_display["Trạng thái"].isin(["Chờ duyệt", "Từ chối"]))
-                                ]
+                            st.write("---")
+                            # --- FORM CẬP NHẬT ---
+                            with st.form(key=f"edit_form_{row_id}", clear_on_submit=True):
+                                st.markdown(f"**📝 Hiệu chỉnh thông tin đơn: {sel_hd_edit}**")
                                 
-                                if df_edit.empty:
-                                    st.info("ℹ️ Bạn không có đơn hàng nào ở trạng thái Chờ duyệt hoặc Từ chối.")
-                                else:
-                                    df_edit['label'] = df_edit['Số HĐ'] + " (" + df_edit['Trạng thái'] + ")"
-                                    sel_label = st.selectbox("🎯 Chọn đơn hàng cần thao tác:", df_edit["label"].tolist())
-                                    sel_hd_edit = sel_label.split(" (")[0]
-                                    
-                                    row_data = df_edit[df_edit["Số HĐ"] == sel_hd_edit].iloc[0]
-                                    row_id = int(row_data["id"])
-                                    current_status = row_data["Trạng thái"]
-                                    old_img_path = row_data.get('hinh_anh') # Lưu đường dẫn cũ để xử lý
-
-                                    # --- NÚT XÓA ĐƠN ---
-                                    if current_status == "Chờ duyệt":
-                                        if st.button("🗑️ XOÁ ĐƠN NÀY", use_container_width=True, type="secondary"):
-                                            try:
-                                                with sqlite3.connect("data.db") as conn:
-                                                    if old_img_path and os.path.exists(old_img_path):
-                                                        os.remove(old_img_path)
-                                                    
-                                                    cur = conn.cursor()
-                                                    cur.execute("DELETE FROM cham_cong WHERE id = ? AND trang_thai = 'Chờ duyệt'", (row_id,))
-                                                    conn.commit()
-                                                st.success("✅ Đã xóa đơn thành công!")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            except Exception as e:
-                                                st.error(f"❌ Không thể xóa: {e}")
+                                # Hiển thị ảnh cũ trực tiếp từ dữ liệu BLOB
+                                if old_img_blob:
+                                    st.image(old_img_blob, width=200, caption="Ảnh hiện tại trong hệ thống")
+                                
+                                n_uploaded_file = st.file_uploader("🆕 Đổi ảnh hóa đơn mới (Nếu cần)", type=["jpg", "png", "jpeg"])
+                                
+                                c1, c2 = st.columns(2)
+                                n_hd_in = c1.text_input("📝 Số hóa đơn *", value=str(row_data['Số HĐ']))
+                                n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=val_quang_duong)
+                                m1, m2 = st.columns(2)
+                                n_may_lon = m1.number_input("🤖 Máy lớn", min_value=0, step=1, value=current_may_lon)
+                                n_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1, value=current_may_nho)
+                                
+                                n_noi_dung = st.text_area("📍 Địa chỉ / Ghi chú mới *", value=raw_address, height=80)
+                                
+                                if st.form_submit_button("💾 XÁC NHẬN CẬP NHẬT & GỬI DUYỆT LẠI", use_container_width=True):
+                                    # Logic tính tiền
+                                    if n_quang_duong <= 50:
+                                        n_don_gia_km = 30000 if n_quang_duong < 20 else 50000 if n_quang_duong <= 30 else 70000 if n_quang_duong <= 40 else 80000
                                     else:
-                                        st.caption("⚠️ Bạn không thể xoá đơn bị từ chối, nhưng có thể cập nhật lại để được duyệt.")
+                                        n_don_gia_km = 80000 + (n_quang_duong - 50) * 5000
+                                    
+                                    n_tong_tien = (n_may_lon * 200000) + (n_may_nho * n_don_gia_km)
+                                    n_tong_combo = n_may_lon + n_may_nho
+                                    n_noi_dung_final = f"{n_noi_dung} | (Máy lớn: {n_may_lon}, Máy nhỏ: {n_may_nho})"
+                                    
+                                    final_img_blob = old_img_blob 
+                                    thoi_gian_cap_nhat = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                                    st.write("---")
-                                    # --- FORM CẬP NHẬT ---
-                                    with st.form(key=f"edit_form_{row_id}", clear_on_submit=True):
-                                        st.markdown(f"**📝 Hiệu chỉnh thông tin đơn: {sel_hd_edit}**")
-                                        
-                                        if old_img_path and os.path.exists(old_img_path):
-                                            st.image(old_img_path, width=150, caption="Ảnh hiện tại")
-                                        
-                                        # Input file mới
-                                        n_uploaded_file = st.file_uploader("🆕 Đổi ảnh hóa đơn mới (Nếu cần)", type=["jpg", "png", "jpeg"])
-                                        
-                                        c1, c2 = st.columns(2)
-                                        n_hd_in = c1.text_input("📝 Số hóa đơn *", value=str(row_data['Số HĐ']))
-                                        n_quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1, value=int(row_data.get('quang_duong', 0))) 
-                                        
-                                        m1, m2 = st.columns(2)
-                                        n_may_lon = m1.number_input("🤖 Máy lớn", min_value=0, step=1, value=0)
-                                        n_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1, value=1)
-                                        
-                                        # Ở đây giả định 'Địa chỉ' là phần text trước dấu |
-                                        raw_address = str(row_data['Địa chỉ']).split(" | (")[0]
-                                        n_noi_dung = st.text_area("📍 Địa chỉ / Ghi chú mới *", value=raw_address, height=80)
-                                        
-                                        if st.form_submit_button("💾 XÁC NHẬN CẬP NHẬT & GỬI DUYỆT LẠI", use_container_width=True):
-                                            # Logic tính tiền đồng nhất với Tab 1
-                                            if n_quang_duong <= 50:
-                                                n_don_gia_km = 30000 if n_quang_duong < 20 else 50000 if n_quang_duong <= 30 else 70000 if n_quang_duong <= 40 else 80000
-                                            else:
-                                                n_don_gia_km = 80000 + (n_quang_duong - 50) * 5000
-                                            
-                                            n_tong_tien = (n_may_lon * 200000) + (n_may_nho * n_don_gia_km)
-                                            n_tong_combo = n_may_lon + n_may_nho
-                                            n_noi_dung_final = f"{n_noi_dung} | (Máy lớn: {n_may_lon}, Máy nhỏ: {n_may_nho})"
-                                            n_img_path = old_img_path # Mặc định giữ ảnh cũ
-                                            thoi_gian_cap_nhat = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                            try:
-                                                # XỬ LÝ ẢNH MỚI NẾU CÓ
-                                                if n_uploaded_file:
-                                                    if not os.path.exists("saved_images"): os.makedirs("saved_images")
-                                                    u_suffix = uuid.uuid4().hex[:6]
-                                                    new_filename = f"{n_hd_in.strip().upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{u_suffix}.jpg"
-                                                    n_img_path = os.path.join("saved_images", new_filename)
-                                                    
-                                                    # Chuẩn hóa & Nén ảnh bằng Pillow
-                                                    img_pil = Image.open(n_uploaded_file)
-                                                    if img_pil.mode in ("RGBA", "P"): img_pil = img_pil.convert("RGB")
-                                                    img_pil.save(n_img_path, "JPEG", quality=75, optimize=True)
-                                                    
-                                                    # Xóa ảnh cũ sau khi đã lưu ảnh mới thành công
-                                                    if old_img_path and os.path.exists(old_img_path):
-                                                        os.remove(old_img_path)
+                                    try:
+                                        if n_uploaded_file:
+                                            img_pil = Image.open(n_uploaded_file)
+                                            if img_pil.mode in ("RGBA", "P"): 
+                                                img_pil = img_pil.convert("RGB")
+                                            img_byte_arr = io.BytesIO()
+                                            img_pil.save(img_byte_arr, format='JPEG', quality=70, optimize=True)
+                                            final_img_blob = img_byte_arr.getvalue()
 
-                                                # CẬP NHẬT DATABASE
-                                                with sqlite3.connect("data.db") as conn:
-                                                    cur = conn.cursor()
-                                                    cur.execute("""
-                                                        UPDATE cham_cong 
-                                                        SET so_hoa_don = ?, noi_dung = ?, quang_duong = ?, combo = ?, 
-                                                            thanh_tien = ?, hinh_anh = ?, trang_thai = 'Chờ duyệt', thoi_gian = ?
-                                                        WHERE id = ?
-                                                    """, (n_hd_in.upper().strip(), n_noi_dung_final, n_quang_duong, 
-                                                        n_tong_combo, n_tong_tien, n_img_path, thoi_gian_cap_nhat, row_id))
-                                                    conn.commit()
-                                                
-                                                st.success("✅ Đã cập nhật và gửi duyệt lại!")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            except Exception as e:
-                                                # Nếu lỗi xảy ra khi đã lưu ảnh mới nhưng chưa update DB, xóa ảnh mới để tránh rác
-                                                if n_uploaded_file and os.path.exists(n_img_path): os.remove(n_img_path)
-                                                st.error(f"❌ Lỗi: {e}")
+                                        with sqlite3.connect("data.db") as conn:
+                                            cur = conn.cursor()
+                                            cur.execute("""
+                                                UPDATE cham_cong 
+                                                SET so_hoa_don = ?, 
+                                                    noi_dung = ?, 
+                                                    quang_duong = ?, 
+                                                    combo = ?, 
+                                                    thanh_tien = ?, 
+                                                    hinh_anh = ?, 
+                                                    trang_thai = 'Chờ duyệt', 
+                                                    thoi_gian = ?,
+                                                    ghi_chu_duyet = ''
+                                                WHERE id = ?
+                                            """, (
+                                                n_hd_in.upper().strip(), 
+                                                n_noi_dung_final, 
+                                                n_quang_duong, 
+                                                n_tong_combo, 
+                                                n_tong_tien, 
+                                                final_img_blob, 
+                                                thoi_gian_cap_nhat, 
+                                                row_id
+                                            ))
+                                            conn.commit()
+                                        
+                                        st.success("✅ Đã cập nhật và gửi duyệt lại!")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Lỗi: {e}")
 
-                        # --- DÀNH CHO ADMIN: ĐẢO NGƯỢC TRẠNG THÁI ---
-                        if role in ["Admin", "System Admin"]:
-                            with st.expander("🔄 Quản lý trạng thái (Hủy duyệt đơn)", expanded=False):
-                                st.warning("⚠️ **Lưu ý:** Thao tác này sẽ đưa đơn hàng từ 'Đã duyệt' về lại 'Chờ duyệt' để xử lý lại.")
-                                
-                                # Admin chỉ xử lý đơn Đã duyệt
-                                df_undo = df_display[df_display["Trạng thái"] == "Đã duyệt"]
-                                
-                                if df_undo.empty:
-                                    st.info("ℹ️ Không có đơn nào đã duyệt để đảo ngược.")
+                # --- DÀNH CHO ADMIN: ĐẢO NGƯỢC TRẠNG THÁI ---
+                if role in ["Admin", "System Admin"]:
+                    with st.expander("🔄 Quản lý trạng thái (Hủy duyệt đơn)", expanded=False):
+                        st.warning("⚠️ **Lưu ý:** Thao tác này sẽ đưa đơn hàng từ 'Đã duyệt' về lại 'Chờ duyệt' để xử lý lại.")
+                        
+                        # Admin chỉ xử lý đơn Đã duyệt
+                        df_undo = df_display[df_display["Trạng thái"] == "Đã duyệt"]
+                        
+                        if df_undo.empty:
+                            st.info("ℹ️ Không có đơn nào đã duyệt để đảo ngược.")
+                        else:
+                            # 1. Chọn hóa đơn
+                            sel_undo = st.selectbox("⏪ Chọn Số HĐ muốn đưa về chờ duyệt:", df_undo["Số HĐ"].tolist(), key="undo_select")
+                            
+                            # 2. Lấy toàn bộ dữ liệu của hàng được chọn
+                            row_undo_data = df_undo[df_undo["Số HĐ"] == sel_undo].iloc[0]
+                            row_id_undo = int(row_undo_data["id"])
+                            img_blob_undo = row_undo_data.get("hinh_anh") # Lấy dữ liệu BLOB ảnh
+
+                            # ---DÙNG POPOVER (Nút bấm hiện khung nổi) ---
+                            if img_blob_undo:
+                                with st.popover(f"🔍 Xem ảnh {sel_undo}", use_container_width=True):
+                                    st.image(img_blob_undo, use_container_width=True)
+                            else:
+                                st.caption("ℹ️ Đơn này không có ảnh đính kèm.")
+
+                            # 4. Nhập lý do và xử lý
+                            reason_undo = st.text_input("📝 Lý do đưa về chờ duyệt:", placeholder="Ví dụ: Cần kiểm tra lại thực tế số km...")
+                            
+                            if st.button("⏪ ĐẢO NGƯỢC VỀ CHỜ DUYỆT", use_container_width=True, type="primary"):
+                                if not reason_undo:
+                                    st.error("❌ Vui lòng nhập lý do để nhân viên biết cần điều chỉnh gì!")
                                 else:
-                                    sel_undo = st.selectbox("⏪ Chọn Số HĐ muốn đưa về chờ duyệt:", df_undo["Số HĐ"].tolist(), key="undo_select")
-                                    row_id_undo = int(df_undo[df_undo["Số HĐ"] == sel_undo]["id"].iloc[0])
-                                    
-                                    # Bổ sung ô nhập lý do đảo ngược
-                                    reason_undo = st.text_input("📝 Lý do đưa về chờ duyệt:", placeholder="Ví dụ: Cần kiểm tra lại thực tế số km...")
-                                    
-                                    if st.button("⏪ ĐẢO NGƯỢC VỀ CHỜ DUYỆT", use_container_width=True, type="primary"):
-                                        if not reason_undo:
-                                            st.error("❌ Vui lòng nhập lý do để nhân viên biết cần điều chỉnh gì!")
-                                        else:
-                                            try:
-                                                with sqlite3.connect("data.db") as conn:
-                                                    cur = conn.cursor()
-                                                    # Cập nhật trạng thái và chèn lý do vào cột 'ly_do' (hoặc 'ghi_chu')
-                                                    # Ở đây giả định cột lưu lý do của bạn tên là 'ly_do'
-                                                    cur.execute("""
-                                                        UPDATE cham_cong 
-                                                        SET trang_thai = 'Chờ duyệt', 
-                                                            ghi_chu_duyet = ? 
-                                                        WHERE id = ?
-                                                    """, (f"ADMIN HỦY DUYỆT: {reason_undo}", row_id_undo))
-                                                    conn.commit()
-                                                
-                                                st.success(f"✅ Đã chuyển đơn {sel_undo} về trạng thái Chờ duyệt!")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            except Exception as e:
-                                                st.error(f"❌ Lỗi: {e}")
+                                    try:
+                                        with sqlite3.connect("data.db") as conn:
+                                            cur = conn.cursor()
+                                            cur.execute("""
+                                                UPDATE cham_cong 
+                                                SET trang_thai = 'Chờ duyệt', 
+                                                    ghi_chu_duyet = ? 
+                                                WHERE id = ?
+                                            """, (f"ADMIN HỦY DUYỆT: {reason_undo}", row_id_undo))
+                                            conn.commit()
+                                        
+                                        st.success(f"✅ Đã chuyển đơn {sel_undo} về trạng thái Chờ duyệt!")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Lỗi: {e}")
 # ==============================================================================
 # PHÂN HỆ 3: QUẢN TRỊ HỆ THỐNG
 # ==============================================================================

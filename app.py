@@ -86,15 +86,6 @@ def init_db():
             dia_chi TEXT
         )''')
         
-        # Tạo Admin mặc định nếu DB trống
-        c.execute("SELECT COUNT(*) FROM quan_tri_vien")
-        if c.fetchone()[0] == 0:
-            pw = hash_password("admin123")
-            c.execute("""
-                INSERT INTO quan_tri_vien (username, password, role, ho_ten, chuc_danh)
-                VALUES (?, ?, ?, ?, ?)
-            """, ("admin", pw, "System Admin", "Quản trị viên", "Hệ thống"))
-        
         conn.commit()
     Path("saved_images").mkdir(parents=True, exist_ok=True)
 

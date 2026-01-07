@@ -3,3 +3,10 @@ __pycache__/
 venv/
 .env
 .DS_Store
+# Database
+data.db
+data.db-journal
+.streamlit/secrets.toml
+
+# Thư mục hình ảnh chấm công (Để tránh làm nặng GitHub)
+saved_images/

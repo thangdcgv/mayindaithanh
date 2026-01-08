@@ -126,29 +126,39 @@ def login_logic():
             submit = st.form_submit_button("ĐĂNG NHẬP", use_container_width=True)
 
             if submit:
+                import hashlib
+                # 1. Xem mã băm máy tính tạo ra từ mật khẩu bạn vừa nhập
+                pw_hashed_local = hashlib.sha256(p_in.encode()).hexdigest()
+                
+                # 2. Gọi hàm kiểm tra
                 res = check_login_supabase(u_in, p_in)
+                
                 if res:
-                    # THAY ĐỔI: Sử dụng Key (tên cột) vì Supabase trả về dạng Dictionary
                     st.session_state.update({
                         "authenticated": True, 
-                        "role": res.get('role'),         # Thay cho res[0]
-                        "username": res.get('username'), # Thay cho res[1]
-                        "chuc_danh": res.get('chuc_danh'),# Thay cho res[2]
-                        "ho_ten": res.get('ho_ten')       # Thay cho res[3]
+                        "role": res.get('role'),
+                        "username": res.get('username'),
+                        "chuc_danh": res.get('chuc_danh'),
+                        "ho_ten": res.get('ho_ten')
                     })
-                    
-                    # Lưu vào Cookie nếu người dùng yêu cầu
-                    if remember_me:
-                        # THAY ĐỔI: Lấy username từ dict
-                        cookies["saved_user"] = res.get('username')
-                        cookies.save()
-                    
-                    # THAY ĐỔI: Lấy ho_ten từ dict
-                    st.success(f"✅ Chào mừng {res.get('ho_ten')} quay lại!")
-                    time.sleep(1)
+                    st.success(f"✅ Chào mừng {res.get('ho_ten')}!")
                     st.rerun()
                 else:
-                    st.error("❌ Sai tài khoản hoặc mật khẩu")
+                    # --- KHU VỰC HIỂN THỊ LỖI HỆ THỐNG ---
+                    st.error("❌ Đăng nhập thất bại")
+                    with st.expander("Xem chi tiết lỗi hệ thống (Debug)"):
+                        # Kiểm tra xem User có tồn tại không
+                        check_user = supabase.table("quan_tri_vien").select("password").eq("username", u_in).execute()
+                        
+                        if not check_user.data:
+                            st.warning(f"Lỗi: Không tìm thấy username '{u_in}' trong bảng quan_tri_vien trên Supabase.")
+                        else:
+                            db_password = check_user.data[0].get("password")
+                            st.info(f"Mã băm máy tính tạo ra: {pw_hashed_local}")
+                            st.info(f"Mã băm đang lưu trên DB: {db_password}")
+                            
+                            if pw_hashed_local != db_password:
+                                st.warning("Kết luận: Mật khẩu sai vì hai chuỗi mã băm trên không khớp nhau từng ký tự.")
 
 def logout():
     for key in list(st.session_state.keys()):

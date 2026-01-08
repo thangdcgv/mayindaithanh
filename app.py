@@ -57,20 +57,22 @@ if not cookies.ready():
 # 2. HÀM KIỂM TRA ĐĂNG NHẬP (Thay thế cho SQLite)
 def check_login_supabase(u, p):
     try:
+        import hashlib
+        # Đảm bảo dùng đúng thuật toán SHA-256
         pw_hashed = hashlib.sha256(p.encode()).hexdigest()
         
-        # Sửa .select("*") để lấy toàn bộ cột (bao gồm cả chuc_danh)
+        # Dùng dấu "*" để lấy TOÀN BỘ cột, tránh thiếu chuc_danh
         response = supabase.table("quan_tri_vien")\
             .select("*")\
             .eq("username", u)\
             .eq("password", pw_hashed)\
             .execute()
         
-        if response.data:
-            return response.data[0] 
+        if response.data and len(response.data) > 0:
+            return response.data[0]
         return None
     except Exception as e:
-        st.error(f"Lỗi kết nối Supabase: {e}")
+        st.error(f"Lỗi kết nối: {e}")
         return None
 
 def check_login_by_username(u_in):

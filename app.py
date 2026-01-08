@@ -42,67 +42,7 @@ def get_conn():
         timeout=30
     )
 
-def init_db():
-    """Khởi tạo cấu trúc Database chuẩn ngay từ đầu"""
-    with get_conn() as conn:
-        c = conn.cursor()   
-        # 1. Bảng chấm công lắp đặt (Dùng BLOB cho ảnh để hiển thị to/rõ)
-        c.execute('''CREATE TABLE IF NOT EXISTS cham_cong (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT, 
-            ten TEXT, 
-            thoi_gian TEXT, 
-            so_hoa_don TEXT UNIQUE,
-            noi_dung TEXT, 
-            quang_duong REAL, 
-            combo INTEGER,
-            thanh_tien REAL, 
-            hinh_anh BLOB, 
-            trang_thai TEXT DEFAULT 'Chờ duyệt',
-            ghi_chu_duyet TEXT DEFAULT ''
-        )''')
 
-        # 2. Bảng chấm công đi làm
-        c.execute('''CREATE TABLE IF NOT EXISTS cham_cong_di_lam (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT, 
-            thoi_gian TEXT, 
-            trang_thai_lam TEXT,
-            ghi_chu TEXT,         
-            nguoi_thao_tac TEXT
-        )''')
-
-        # 3. Bảng quản trị viên
-        c.execute('''CREATE TABLE IF NOT EXISTS quan_tri_vien (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE, 
-            password TEXT, 
-            role TEXT, 
-            nhan_vien_id INTEGER DEFAULT NULL,
-            ho_ten TEXT,
-            chuc_danh TEXT,
-            ngay_sinh TEXT,
-            so_dien_thoai TEXT,
-            dia_chi TEXT
-        )''')
-        
-        conn.commit()
-    Path("saved_images").mkdir(parents=True, exist_ok=True)
-
-def create_indexes():
-    """Tạo chỉ mục để tăng tốc truy vấn khi JOIN bảng"""
-    try:
-        with get_conn() as conn:
-            c = conn.cursor()
-            c.execute("CREATE INDEX IF NOT EXISTS idx_cc_user ON cham_cong(username)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_qtv_user ON quan_tri_vien(username)")
-            conn.commit()
-    except:
-        pass
-
-# THỰC THI KHỞI TẠO (Phải chạy trước khi dùng các hàm Login)
-init_db()
-create_indexes()
 
 # ==============================================================================
 # 3. QUẢN LÝ ĐĂNG NHẬP & COOKIES
@@ -117,19 +57,17 @@ if not cookies.ready():
 # 2. HÀM KIỂM TRA ĐĂNG NHẬP (Thay thế cho SQLite)
 def check_login_supabase(u, p):
     try:
-        # Hash mật khẩu trước khi so sánh (giống code cũ của bạn)
-        import hashlib
         pw_hashed = hashlib.sha256(p.encode()).hexdigest()
         
-        # Truy vấn Supabase
+        # Sửa .select("*") để lấy toàn bộ cột (bao gồm cả chuc_danh)
         response = supabase.table("quan_tri_vien")\
-            .select("role, username, ho_ten")\
+            .select("*")\
             .eq("username", u)\
             .eq("password", pw_hashed)\
             .execute()
         
         if response.data:
-            return response.data[0] # Trả về dict thông tin user
+            return response.data[0] 
         return None
     except Exception as e:
         st.error(f"Lỗi kết nối Supabase: {e}")

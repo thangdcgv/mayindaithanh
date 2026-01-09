@@ -6,7 +6,6 @@ import os
 import hashlib
 import time
 import io
-import re
 import base64
 from PIL import Image
 from pathlib import Path
@@ -966,6 +965,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
         user_login    = current_u
         role = current_r
         role_login = current_r
+        row_id = None
         # --- KHỞI TẠO BIẾN TRƯỚC ĐỂ TRÁNH CRASH ---
         df_all = pd.DataFrame() 
         res = None
@@ -1305,7 +1305,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
         # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
         st.divider()
         # Lấy thông tin từ Cookie/Session
-        user_login = st.session_state.get("username")
+        user_login = st.session_state.get("username"," ")
         role_login = st.session_state.get("role")
 
         # --- DÀNH CHO USER & MANAGER: SỬA HOẶC XÓA ĐƠN CỦA CHÍNH MÌNH ---

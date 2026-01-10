@@ -11,6 +11,8 @@ from PIL import Image
 from pathlib import Path
 import plotly.express as px
 from streamlit_cookies_manager import EncryptedCookieManager
+import calendar 
+
 
 st.set_page_config(
     page_title="Đại Thành - Ứng Dụng Nội Bộ",
@@ -726,13 +728,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
     # 1. PHÂN QUYỀN TABS
     # Gom nhóm logic để dễ quản lý
-    is_manager = role in ["Admin", "System Admin", "Manager"] or chuc_danh == "Quản lý"
-    
-    if is_manager:
-        tabs = st.tabs(["📸 Chấm công lắp đặt", "📋 Duyệt đơn", "📈 Báo cáo lắp đặt"])
-    else:
-        # Nhân viên kỹ thuật/giao nhận chỉ thấy 2 tab
-        tabs = st.tabs(["📸 Chấm công lắp đặt", "📈 Báo cáo lắp đặt"])
+    tabs = st.tabs(["📸 Chấm công lắp đặt", "📋 Duyệt đơn", "📈 Báo cáo lắp đặt"])
 
     def quick_update_status(record_id, new_status, reason=""):
         try:
@@ -873,7 +869,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         else:
                             st.error(f"❌ Lỗi hệ thống: {e}")
 # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/SYSTEM ADMIN/MANAGER) ---
-    if role in ["Admin", "System Admin", "Manager"]:
+    if role in ["Admin", "System Admin", "Manager","User"]:
         with tabs[1]:
             st.markdown("#### 📋 Danh sách đơn chờ duyệt")
             
@@ -882,9 +878,11 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                 res = supabase.table("cham_cong") \
                     .select("*, quan_tri_vien(ho_ten)") \
                     .eq("trang_thai", "Chờ duyệt") \
-                    .order("thoi_gian", desc=False) \
-                    .execute()
                 
+                if role not in ["Admin", "System Admin", "Manager"]:
+                    res = res.eq("username", user_hien_tai)
+                # 3. Sắp xếp và thực thi gửi lệnh lên Server
+                res = res.order("thoi_gian", desc=False).execute()
                 df_p = pd.DataFrame(res.data)
                 
                 # Xử lý lấy ho_ten từ kết quả lồng nhau của Supabase
@@ -900,7 +898,26 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                 # Duyệt qua từng đơn hàng để hiển thị dạng Expander
                 for _, r in df_p.iterrows():
                     # Tiêu đề expander hiển thị các thông tin cơ bản
-                    expander_title = f"📦 HĐ: {r['so_hoa_don']} — 👤 {r['ho_ten_nv']} — 🕒 {r['thoi_gian']}"
+                    # 1. Chuyển đổi chuỗi thời gian sang kiểu datetime
+                    dt_raw = pd.to_datetime(r['thoi_gian'])
+
+                    # 2. Xử lý múi giờ Việt Nam (UTC sang Asia/Ho_Chi_Minh)
+                    try:
+                        # Nếu dữ liệu đã có múi giờ (tz-aware)
+                        if dt_raw.tz is not None:
+                            dt_vn = dt_raw.tz_convert('Asia/Ho_Chi_Minh')
+                        else:
+                            # Nếu dữ liệu chưa có múi giờ, coi như là UTC rồi chuyển sang VN
+                            dt_vn = dt_raw.tz_localize('UTC').tz_convert('Asia/Ho_Chi_Minh')
+                    except:
+                        # Fallback: Nếu lỗi múi giờ, cộng thủ công 7 tiếng
+                        dt_vn = dt_raw + pd.Timedelta(hours=7)
+
+                    # 3. Định dạng chuỗi hiển thị
+                    time_display = dt_vn.strftime('%d/%m/%Y %H:%M')
+
+                    # 4. Đưa vào tiêu đề Expander
+                    expander_title = f"📦 HĐ: {r['so_hoa_don']} — 👤 {r['ho_ten_nv']} — 🕒 {time_display}"
                     
                     with st.expander(expander_title):
                         cl, cr = st.columns([1.5, 1])
@@ -915,6 +932,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             
                             # --- PHÂN QUYỀN THAO TÁC NÚT BẤM ---
                             # Chỉ Admin/System Admin mới có quyền thay đổi trạng thái đơn
+                        
                             if role in ["Admin", "System Admin"]:
                                 b1, b2 = st.columns(2)
                                 
@@ -934,9 +952,17 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                                 st.error("⚠️ Bạn phải nhập lý do từ chối!")
                                             else:
                                                 if quick_update_status(r["id"], "Từ chối", reason.strip()):
-                                                    st.toast("🔴 Đã từ chối đơn hàng")
+                                                    st.toast("🔴 Đã từ chối đơn ")
                                                     time.sleep(0.5)
                                                     st.rerun()
+                            elif user_hien_tai:
+                                # 2. QUYỀN USER (CHỦ ĐƠN): Cho phép xem thông tin đơn đang chờ
+                                if r["trang_thai"] == "Chờ duyệt":
+                                    st.warning("⏳ Đơn của bạn đang trong trạng thái chờ Kế toán phê duyệt.")
+                                elif r["trang_thai"] == "Từ chối":
+                                    st.error(f"❌ Đơn bị từ chối. Lý do: {r.get('ghi_chu_duyet', 'Không có lý do cụ thể')}")
+                                else:
+                                    st.success("✅ Đơn đã được duyệt thành công.")
                             else:
                                 # Nếu là Manager (Chỉ xem, không có quyền duyệt tiền)
                                 st.info("ℹ️ Bạn chỉ có quyền giám sát. Quyền Duyệt/Từ chối thuộc về Kế toán.")
@@ -969,6 +995,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
         # --- KHỞI TẠO BIẾN TRƯỚC ĐỂ TRÁNH CRASH ---
         df_all = pd.DataFrame() 
         res = None
+         
         
         try:
             # 1. Truy vấn dữ liệu từ Supabase
@@ -1010,11 +1037,11 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                     if "username" in df_raw.columns:
                         df_all = df_raw[df_raw["username"] == user_hien_tai].copy()
                     else:
-                        df_all = pd.DataFrame() # Hoặc xử lý lỗi nếu thiếu cột username
+                        df_all = pd.DataFrame()
 
                 # 6. KIỂM TRA DỮ LIỆU SAU LỌC
                 if df_all.empty:
-                    st.info(f"ℹ️ Tài khoản `{user_hien_tai}` chưa có dữ liệu đơn hàng nào.")
+                    st.info(f"ℹ️ Tài khoản `{user_hien_tai}` chưa có dữ liệu đơn nào.")
                 else:
                     # GIAO DIỆN TỔNG QUAN (DÀNH CHO QUẢN LÝ)
                     if role in ["Admin", "System Admin", "Manager"]:
@@ -1039,268 +1066,197 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             with c2:
                                 fig_pie = px.pie(stats, values="Doanh_thu", names="Tên", 
                                                 title="Tỷ lệ doanh thu lắp đặt",
-                                                hole=0.4) # Biểu đồ dạng Donut cho hiện đại
+                                                hole=0.4)
                                 st.plotly_chart(fig_pie, use_container_width=True)
                         else:
-                            st.warning("Chưa có đơn hàng nào được chuyển trạng thái 'Đã duyệt'.")
-                        
-                        st.divider()                     
-                        # Hiển thị bảng dữ liệu chi tiết cho mọi user sau khi đã lọc
-                        # --- 4. BÁO CÁO CHI TIẾT (ĐÃ TỐI ƯU CHO COOKIE) ---
-                        with st.expander("📊 Tra cứu chi tiết và Xuất báo cáo đơn hàng", expanded=False):
-                            col_f1, col_f2, col_f3 = st.columns(3)
-                        
+                            st.warning("Chưa có đơn nào được chuyển trạng thái 'Đã duyệt'.")
+                    
+                    st.divider()
+
+                    # --- 4. BÁO CÁO CHI TIẾT (ĐÃ TỐI ƯU CHO COOKIE) ---
+                    with st.expander("📊 Tra cứu chi tiết và Xuất báo cáo", expanded=False):
+                        col_f1, col_f2, col_f3 = st.columns(3)
+
                         # Lấy thông tin từ Session đã nạp bởi Cookie
                         current_role = st.session_state.get("role")
                         current_user = st.session_state.get("username")
                         current_ho_ten = st.session_state.get("ho_ten")
 
-                        # --- PHẦN LOGIC: BỘ LỌC THỜI GIAN ---
-                        if current_role in ["Admin", "System Admin"]:
-                            # Admin chọn theo tháng cố định
-                            curr_date = date.today()
-                            month_opts = []
-                            for i in range(12):
-                                m_date = (curr_date.replace(day=1) - pd.DateOffset(months=i))
-                                month_opts.append(m_date.strftime("%m/%Y"))
-                            
-                            sel_month = col_f1.selectbox("📅 Chọn tháng báo cáo", month_opts)
-                            
-                            sel_dt = datetime.strptime(sel_month, "%m/%Y")
-                            start_d = sel_dt.date().replace(day=1)
-                            import calendar
-                            last_day = calendar.monthrange(sel_dt.year, sel_dt.month)[1]
-                            end_d = sel_dt.date().replace(day=last_day)
-                            d_range = [start_d, end_d]
-                        else:
-                            # Nhân viên/Manager chọn dải ngày tự do
-                            d_range = col_f1.date_input("📅 Khoảng thời gian", 
-                                                        value=[date.today().replace(day=1), date.today()], 
-                                                        format="DD/MM/YYYY")
+                        # --- 1. PHẦN DÙNG CHUNG: CHỌN THÁNG (Cho cả Admin và User) ---
+                        curr_date = date.today()
+                        month_opts = [(curr_date.replace(day=1) - pd.DateOffset(months=i)).strftime("%m/%Y") for i in range(12)]
 
-                            # Bộ lọc nhân viên: Nếu là User thì bị khóa chỉ được xem chính mình
+                        sel_month = col_f1.selectbox("📅 Chọn tháng báo cáo", month_opts)
+
+                        # Tính toán ngày bắt đầu và kết thúc từ tháng đã chọn
+                        sel_dt = datetime.strptime(sel_month, "%m/%Y")
+                        start_d = sel_dt.date().replace(day=1)
+                        last_day = calendar.monthrange(sel_dt.year, sel_dt.month)[1]
+                        end_d = sel_dt.date().replace(day=last_day)
+                        d_range = [start_d, end_d]
+
+                        # --- 2. PHẦN PHÂN QUYỀN: CHỌN NHÂN VIÊN & TRẠNG THÁI ---
+                        if current_role in ["Admin", "System Admin", "Manager"]:
+                            # Admin/Manager: Được chọn bất kỳ nhân viên nào
                             nv_opts = ["Tất cả"] + sorted(df_all["Tên"].astype(str).unique().tolist())
-                            
-                            # Mặc định chọn chính mình nếu là User
-                            default_nv_idx = 0
-                            if current_role not in ["Admin", "System Admin", "Manager"] and current_ho_ten in nv_opts:
-                                default_nv_idx = nv_opts.index(current_ho_ten)
-
-                            sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, 
-                                                    index=default_nv_idx,
-                                                    disabled=(current_role not in ["Admin", "System Admin", "Manager"]))
-                            
+                            sel_nv = col_f2.selectbox("👤 Nhân viên", nv_opts, index=0)
+                            sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
+                        else:
+                            # User thường: Chỉ được xem chính mình (Cố định giá trị, không cho chọn người khác)
+                            sel_nv = current_ho_ten 
+                            # Hiển thị thông tin giả lập để user biết họ đang xem đơn của họ
+                            col_f2.text_input("👤 Nhân viên", value=current_ho_ten, disabled=True)
                             sel_tt = col_f3.selectbox("📌 Trạng thái", ["Tất cả", "Chờ duyệt", "Đã duyệt", "Từ chối"])
 
-                            # Chỉ xử lý khi dải ngày hợp lệ (đã chọn đủ start và end)
-                            if isinstance(d_range, list) and len(d_range) == 2:
-                                mask = (df_all["Thời Gian"].dt.date >= d_range[0]) & (df_all["Thời Gian"].dt.date <= d_range[1])
-                                if sel_nv != "Tất cả": 
-                                    mask &= df_all["Tên"] == sel_nv
-                                if sel_tt != "Tất cả": 
-                                    mask &= df_all["Trạng thái"] == sel_tt
-                                
-                                df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
-                                
-                                if df_display.empty:
-                                    st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
-                                else:
-                                    c_met, c_exp = st.columns([2, 1])
-                                    rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
-                                    c_met.metric("💰 Tổng thu nhập đã duyệt", f"{rev_sum:,.0f} VNĐ")
-                                    
-                                    # Hiển thị bảng dữ liệu xem trước
-                                    st.dataframe(df_display.drop(columns=['username'], errors='ignore'), use_container_width=True, hide_index=True)
-
-                                    # --- XỬ LÝ XUẤT EXCEL CHI TIẾT THEO MẪU ---
-                                    out = io.BytesIO()
-                                    df_export = df_display.sort_values("Thời Gian").copy()
-                                    df_export.insert(0, 'STT', range(1, len(df_export) + 1))
-                                    df_export['Ngày'] = df_export['Thời Gian'].dt.strftime('%d/%m/%Y')
-                                    # Sử dụng .get() hoặc kiểm tra cột tồn tại trước khi truy cập
-                                    if 'combo' in df_export.columns:
-                                        df_export['Máy'] = df_export['combo'].fillna(0).astype(int)
-                                    else:
-                                        df_export['Máy'] = 0
-
-                                    if 'Km' in df_export.columns:
-                                        df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "")
-                                    else:
-                                        df_export['Km_Số'] = ""
-                                    # Chuẩn bị bảng chính
-                                    df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Lý do', 'Trạng thái']]
-                                    df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Ghi chú duyệt', 'Tình trạng']
-
-                                    # Chuẩn bị bảng tổng hợp (Summary)
-                                    df_approved = df_display[df_display['Trạng thái'] == 'Đã duyệt'].copy()
-                                    if not df_approved.empty:
-                                        df_summary = df_approved.groupby("Tên").agg(
-                                            Tong_Don=("Số HĐ", "count"),
-                                            Tong_Cong=("Thành tiền", "sum") 
-                                        ).reset_index()
-                                    else:
-                                        df_summary = pd.DataFrame(columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
-                                        
-                                    df_summary.columns = ['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
-                                    if not df_summary.empty:
-                                        total_row = pd.DataFrame([['TỔNG CỘNG', df_summary['Tổng ĐƠN'].sum(), df_summary['Tổng CÔNG'].sum()]], 
-                                                                columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
-                                        df_summary = pd.concat([df_summary, total_row], ignore_index=True)
-
-                                    # Ghi file Excel
-                                    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
-                                        df_main.to_excel(writer, index=False, sheet_name="BaoCao", startrow=3)
-                                        wb = writer.book
-                                        ws = writer.sheets['BaoCao']
-                                        
-                                        # --- FORMATS (Đã tối ưu màu sắc hiển thị) ---
-                                        title_fmt = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#C6EFCE', 'border': 1})
-                                        header_fmt = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#2E75B6', 'font_color': 'white', 'border': 1})
-                                        cell_fmt = wb.add_format({'border': 1, 'valign': 'vcenter'})
-                                        center_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
-                                        note_box_fmt = wb.add_format({'border': 1, 'bg_color': '#F2F2F2', 'text_wrap': True, 'align': 'left', 'valign': 'vcenter', 'font_size': 9})
-                                        # --- CHÈN ĐOẠN NÀY VÀO TRƯỚC DÒNG 104 ---
-                                        if 'sel_month' not in locals():
-                                            # Nếu không phải Admin, lấy tháng/năm từ dải ngày d_range đã chọn
-                                            sel_month = d_range[0].strftime("%m/%Y")
-                                        label_time = sel_month if current_role in ["Admin", "System Admin"] else f"{d_range[0].strftime('%d/%m')} - {d_range[1].strftime('%d/%m/%Y')}"
-                                        ws.merge_range('A1:H2', f'BẢNG TỔNG HỢP CÔNG LẮP ĐẶT - {label_time}', title_fmt)
-                                        
-                                        # Format cột
-                                        ws.set_column('A:A', 5, center_fmt)
-                                        ws.set_column('B:B', 12, center_fmt)
-                                        ws.set_column('C:C', 35, cell_fmt)
-                                        ws.set_column('D:D', 20, cell_fmt)
-                                        ws.set_column('E:F', 10, center_fmt)
-                                        ws.set_column('G:G', 20, cell_fmt)
-                                        ws.set_column('H:H', 15, center_fmt)
-
-                                        # Ghi bảng tổng hợp bên cạnh
-                                        summary_start_col = 10
-                                        ws.write(3, summary_start_col, "TỔNG HỢP CHI PHÍ", title_fmt)
-                                        df_summary.to_excel(writer, index=False, sheet_name="BaoCao", startrow=4, startcol=summary_start_col)
-
-                            c_exp.download_button(
-                                label="📥 Tải Excel Báo Cáo", 
-                                data=out.getvalue(), 
-                                file_name=f"Bao_Cao_Lap_Dat_{current_user}_{date.today()}.xlsx", 
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
-
-                                    # --- 3. HIỂN THỊ BẢNG TRÊN GIAO DIỆN (TỐI ƯU CHO COOKIE & DATA_EDITOR) ---
-                            df_temp = df_display.copy()
-
-                            # Xóa các cột nặng/không cần thiết trước khi render để app chạy mượt hơn
-                            if 'hinh_anh' in df_temp.columns:
-                                df_temp = df_temp.drop(columns=['hinh_anh'])
-
-                            # 1. THÊM CỘT CHỌN (Chỉ dành cho System Admin)
-                            if role == "System Admin":
-                                # Khởi tạo mặc định False cho cột Chọn
-                                df_temp.insert(0, "Chọn", False)
-
-                            # 2. THÊM CỘT STT
-                            if 'STT' not in df_temp.columns:
-                                stt_pos = 1 if role == "System Admin" else 0
-                                df_temp.insert(stt_pos, 'STT', range(1, len(df_temp) + 1))
-
-                            # 3. CHUẨN HÓA DỮ LIỆU HIỂN THỊ
-                            df_temp['Chi tiết lắp đặt'] = (
-                                df_temp['Địa chỉ'].astype(str) + " - " + 
-                                df_temp['Km'].astype(str) + "km - " + 
-                                df_temp['combo'].astype(str) + " máy"
-                            )
-                            df_temp['Thành tiền'] = pd.to_numeric(df_temp['Thành tiền'], errors='coerce')
-
-                            # --- 4. LOGIC PHÂN TRANG (Tối ưu để không bị lỗi khi lọc dữ liệu) ---
-                            rows_per_page = 10
-                            total_rows = len(df_temp)
-                            total_pages = max((total_rows // rows_per_page) + (1 if total_rows % rows_per_page > 0 else 0), 1)
-
-                            # Sử dụng key riêng cho phân hệ lắp đặt để không trùng với chấm công
-                            if 'page_lap_dat' not in st.session_state:
-                                st.session_state.page_lap_dat = 1
-
-                            # Kiểm tra nếu trang hiện tại vượt quá tổng số trang do bộ lọc (filter) thay đổi
-                            if st.session_state.page_lap_dat > total_pages:
-                                st.session_state.page_lap_dat = 1
-
-                            if total_rows > 0:
-                                st.markdown(f"###### *Danh sách đơn hàng (Tổng: {total_rows} đơn)")
-                                
-                                # GIAO DIỆN CHUYỂN TRANG
-                                if total_pages > 1:
-                                    col_nav1, col_nav2, col_nav3 = st.columns([1, 2, 1])
-                                    with col_nav1:
-                                        if st.button("⬅️ Trước", use_container_width=True, disabled=(st.session_state.page_lap_dat == 1)):
-                                            st.session_state.page_lap_dat -= 1
-                                            st.rerun()
-                                    with col_nav2:
-                                        st.markdown(f"<p style='text-align:center; color:grey;'>Trang {st.session_state.page_lap_dat} / {total_pages}</p>", unsafe_allow_html=True)
-                                    with col_nav3:
-                                        if st.button("Sau ➡️", use_container_width=True, disabled=(st.session_state.page_lap_dat == total_pages)):
-                                            st.session_state.page_lap_dat += 1
-                                            st.rerun()
-                                            
-                                    page_num = st.session_state.page_lap_dat
-                                else:
-                                    page_num = 1
-                                
-                                start_idx = (page_num - 1) * rows_per_page
-                                end_idx = start_idx + rows_per_page
-                                df_page = df_temp.iloc[start_idx:end_idx]
-
-                                # --- 5. HIỂN THỊ BẢNG VỚI DATA_EDITOR ---
-                                base_order = ["STT", "Tên", "Thời Gian", "Số HĐ", "Chi tiết lắp đặt", "Thành tiền", "Trạng thái", "Lý do", "username"]
-                                final_order = (["Chọn"] + base_order) if role == "System Admin" else base_order
-
-                                edited_df = st.data_editor(
-                                    df_page, 
-                                    use_container_width=True, 
-                                    hide_index=True,
-                                    column_order=final_order,
-                                    column_config={
-                                        "Chọn": st.column_config.CheckboxColumn("Chọn", default=False),
-                                        "STT": st.column_config.NumberColumn("STT", width="small"),
-                                        "Thành tiền": st.column_config.NumberColumn("Thành tiền", format="%d VNĐ"),
-                                        "Thời Gian": st.column_config.DatetimeColumn("Thời gian", format="DD/MM/YYYY HH:mm"),
-                                        "Trạng thái": st.column_config.TextColumn("Trạng thái", width="small"),
-                                        "username": st.column_config.TextColumn("Người tạo", width="small"),
-                                        "id": None, "Địa chỉ": None, "Km": None, "combo": None, "ghi_chu_duyet": None # Ẩn cột ID và các cột rác
-                                    },
-                                    disabled=[c for c in df_page.columns if c != "Chọn"]
-                                )
-
-                                # --- 6. NÚT XOÁ (Dành cho System Admin) ---
-                                if role == "System Admin":
-                                    # Tìm ID các dòng được chọn
-                                    selected_ids = edited_df[edited_df["Chọn"] == True]["id"].tolist()
-                                    if selected_ids:
-                                        st.warning(f"🔔 Đang chọn {len(selected_ids)} mục để xử lý.")
-                                        if st.button("🔥 XÁC NHẬN XÓA VĨNH VIỄN", type="primary", use_container_width=True):
-                                            try:
-                                                # Sử dụng phương thức delete() của Supabase với bộ lọc .in_()
-                                                # selected_ids là danh sách các ID bạn đã lấy từ dataframe editor
-                                                supabase.table("cham_cong") \
-                                                    .delete() \
-                                                    .in_("id", selected_ids) \
-                                                    .execute()
-                                                
-                                                st.success(f"✅ Đã xóa thành công {len(selected_ids)} dữ liệu!")
-                                                time.sleep(0.5)
-                                                st.rerun()
-                                            except Exception as e:
-                                                # Xử lý lỗi kết nối hoặc quyền hạn từ Supabase
-                                                st.error(f"❌ Lỗi khi xóa trên Cloud: {e}")
-                                    else:
-                                        st.caption("💡 *Mẹo: Tích chọn ô ở cột đầu tiên để thực hiện xóa hàng loạt đơn hàng.*")
+                        # Áp dụng bộ lọc khi hợp lệ
+                        if isinstance(d_range, (list, tuple)) and len(d_range) == 2:
+                            # 1. THIẾT LẬP MASK (BỘ LỌC) CHUẨN PHÂN QUYỀN
+                            mask = (df_all["Thời Gian"].dt.date >= d_range[0]) & (df_all["Thời Gian"].dt.date <= d_range[1])
+                            
+                            if current_role in ["Admin", "System Admin"]:
+                                # Admin: Lọc theo nhân viên được chọn và trạng thái
+                                if sel_nv != "Tất cả":
+                                    mask &= (df_all["Tên"] == sel_nv)
+                                if sel_tt != "Tất cả":
+                                    mask &= (df_all["Trạng thái"] == sel_tt)
                             else:
-                                st.info("ℹ️ Hiện chưa có dữ liệu báo cáo nào.")
+                                # USER THƯỜNG: Bắt buộc chỉ thấy đơn của chính mình
+                                mask &= (df_all["username"] == current_user)
+                                # Vẫn cho phép User lọc theo trạng thái đơn của họ
+                                if sel_tt != "Tất cả":
+                                    mask &= (df_all["Trạng thái"] == sel_tt)
+                            
+                            # 2. TRÍCH XUẤT DỮ LIỆU SAU LỌC
+                            df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
+                            
+                            if df_display.empty:
+                                st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
+                            else:
+                                # --- HIỂN THỊ METRIC TỔNG THU NHẬP ---
+                                c_met, c_exp = st.columns([2, 1])
+                                rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
+                                c_met.metric("💰 Tổng thu nhập đã duyệt", f"{rev_sum:,.0f} VNĐ")
+                                
+                                # --- XỬ LÝ GIAO DIỆN BẢNG HIỂN THỊ (df_view) ---
+                                df_view = df_display.copy()
+
+                                # A. Định dạng múi giờ Việt Nam và Ngày/Tháng/Năm Giờ:Phút
+                                if 'Thời Gian' in df_view.columns:
+                                    df_view['Thời Gian'] = pd.to_datetime(df_view['Thời Gian'])
+                                    try:
+                                        if df_view['Thời Gian'].dt.tz is None:
+                                            df_view['Thời Gian'] = df_view['Thời Gian'].dt.tz_localize('UTC').dt.tz_convert('Asia/Ho_Chi_Minh')
+                                        else:
+                                            df_view['Thời Gian'] = df_view['Thời Gian'].dt.tz_convert('Asia/Ho_Chi_Minh')
+                                    except:
+                                        df_view['Thời Gian'] = df_view['Thời Gian'] + pd.Timedelta(hours=7)
+                                    df_view['Thời Gian'] = df_view['Thời Gian'].dt.strftime('%d/%m/%Y %H:%M')
+
+                                # B. Thêm cột STT tự động tăng dần
+                                if 'STT' in df_view.columns:
+                                    df_view = df_view.drop(columns=['STT'])
+                                df_view.insert(0, "STT", range(1, len(df_view) + 1))
+
+                                # C. Đổi tên cột và Lọc cột hiển thị
+                                map_names = {
+                                    "combo": "Số lượng máy",
+                                    "km": "Quãng đường (Km)",
+                                    "dia_chi": "Địa chỉ",
+                                    "noi_dung": "Địa chỉ" # Dự phòng nếu tên gốc là noi_dung
+                                }
+                                df_view = df_view.rename(columns=map_names)
+
+                                desired_columns = [
+                                    "STT", "Tên", "Thời Gian", "Số HĐ", "Địa chỉ", 
+                                    "Quãng đường (Km)", "Số lượng máy", "Thành tiền", "Trạng thái", "Lý do"
+                                ]
+                                
+                                # Loại bỏ các cột không cần thiết và cột trùng lặp
+                                final_cols = [c for c in desired_columns if c in df_view.columns]
+                                
+                                # Hiển thị bảng lên UI
+                                st.dataframe(df_view[final_cols], use_container_width=True, hide_index=True)
+
+                                # --- XỬ LÝ XUẤT FILE EXCEL ---
+                                out = io.BytesIO()
+                                df_export = df_display.sort_values("Thời Gian").copy()
+                                
+                                # Định dạng ngày cho Excel
+                                df_export['Ngày'] = df_export['Thời Gian'].dt.strftime('%d/%m/%Y')
+                                df_export.insert(0, 'STT', range(1, len(df_export) + 1))
+
+                                # Xử lý các cột số lượng
+                                df_export['Máy'] = df_export['combo'].fillna(0).astype(int) if 'combo' in df_export.columns else 0
+                                df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "") if 'Km' in df_export.columns else ""
+
+                                # Chuẩn bị Sheet chính
+                                df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Lý do', 'Trạng thái']]
+                                df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Ghi chú duyệt', 'Tình trạng']
+
+                                # Chuẩn bị Sheet Summary (Tổng hợp chi phí)
+                                df_approved = df_display[df_display['Trạng thái'] == 'Đã duyệt'].copy()
+                                if not df_approved.empty:
+                                    df_summary = df_approved.groupby("Tên").agg(
+                                        Tong_Don=("Số HĐ", "count"),
+                                        Tong_Cong=("Thành tiền", "sum") 
+                                    ).reset_index()
+                                else:
+                                    df_summary = pd.DataFrame(columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
+                                
+                                df_summary.columns = ['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
+                                if not df_summary.empty:
+                                    total_row = pd.DataFrame(
+                                        [['TỔNG CỘNG', df_summary['Tổng ĐƠN'].sum(), df_summary['Tổng CÔNG'].sum()]], 
+                                        columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
+                                    )
+                                    df_summary = pd.concat([df_summary, total_row], ignore_index=True)
+
+                                # Ghi file Excel bằng XlsxWriter
+                                with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+                                    df_main.to_excel(writer, index=False, sheet_name="BaoCao", startrow=3)
+                                    wb = writer.book
+                                    ws = writer.sheets['BaoCao']
+                                    
+                                    # Formats
+                                    title_fmt = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#C6EFCE', 'border': 1})
+                                    header_fmt = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#2E75B6', 'font_color': 'white', 'border': 1})
+                                    cell_fmt = wb.add_format({'border': 1, 'valign': 'vcenter'})
+                                    center_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+                                    
+                                    # Tiêu đề báo cáo
+                                    if 'sel_month' not in locals():
+                                        sel_month = d_range[0].strftime("%m/%Y")
+                                    
+                                    label_time = sel_month if current_role in ["Admin", "System Admin"] else f"{d_range[0].strftime('%d/%m')} - {d_range[1].strftime('%d/%m/%Y')}"
+                                    ws.merge_range('A1:H2', f'BẢNG TỔNG HỢP CÔNG LẮP ĐẶT - {label_time}', title_fmt)
+                                    
+                                    # Căn chỉnh độ rộng cột
+                                    ws.set_column('A:A', 5, center_fmt)
+                                    ws.set_column('B:B', 12, center_fmt)
+                                    ws.set_column('C:C', 35, cell_fmt)
+                                    ws.set_column('D:D', 20, cell_fmt)
+                                    ws.set_column('E:F', 10, center_fmt)
+                                    ws.set_column('G:G', 20, cell_fmt)
+                                    ws.set_column('H:H', 15, center_fmt)
+
+                                    # Ghi bảng tổng hợp
+                                    summary_start_col = 10
+                                    ws.write(3, summary_start_col, "TỔNG HỢP CHI PHÍ", title_fmt)
+                                    df_summary.to_excel(writer, index=False, sheet_name="BaoCao", startrow=4, startcol=summary_start_col)
+
+                                # NÚT TẢI EXCEL
+                                c_exp.download_button(
+                                    label="📥 Tải Excel Báo Cáo", 
+                                    data=out.getvalue(), 
+                                    file_name=f"Bao_Cao_Lap_Dat_{current_user}_{date.today()}.xlsx", 
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
+                                )
             else:
-                st.info("📭 Chưa có dữ liệu đơn hàng nào trong hệ thống.")
+                st.info("📭 Chưa có dữ liệu đơn nào trong hệ thống.")
         except Exception as e:
             st.error(f"Lỗi tải dữ liệu: {e}")
+
 
         # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
         st.divider()
@@ -1312,7 +1268,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
         if role_login in ["User", "Manager"]:
             with st.expander("🛠️ Cập nhật thông tin đơn", expanded=False):
                 st.markdown("""
-                **📌 Hướng dẫn trạng thái đơn hàng:**
+                **📌 Hướng dẫn trạng thái đơn lắp đặt:**
                 - 🟡 **Chờ duyệt:** Đơn đã gửi. Bạn có thể **Sửa** hoặc **Xóa**.
                 - 🔴 **Từ chối:** Đơn sai thông tin. Vui lòng **cập nhật lại**.
                 - 🟢 **Đã duyệt:** Đơn hợp lệ. **Không thể chỉnh sửa**.
@@ -1325,18 +1281,18 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                 ].copy()
                 
                 if df_edit.empty:
-                    st.info("ℹ️ Bạn không có đơn hàng nào ở trạng thái Chờ duyệt hoặc Từ chối.")
+                    st.info("ℹ️ Bạn không có đơn nào ở trạng thái Chờ duyệt hoặc Từ chối.")
                 else:
                     # 2. Tạo nhãn (Ép Số HĐ về string để tránh lỗi nối chuỗi)
                     df_edit['label'] = df_edit['Số HĐ'].astype(str) + " (" + df_edit['Trạng thái'] + ")"
-                    sel_label = st.selectbox("🎯 Chọn đơn hàng cần thao tác:", df_edit["label"].tolist(), key="sel_edit_order")
+                    sel_label = st.selectbox("🎯 Chọn đơn cần thao tác:", df_edit["label"].tolist(), key="sel_edit_order")
                     
                     # Tách lấy Số HĐ và đảm bảo kiểu dữ liệu khi so sánh để tìm row_data
                     sel_hd_edit = sel_label.split(" (")[0]
                     # SỬA LỖI: So sánh đồng nhất kiểu chuỗi
                     mask = df_edit["Số HĐ"].astype(str) == sel_hd_edit
                     if not mask.any():
-                        st.error("Không tìm thấy dữ liệu đơn hàng.")
+                        st.error("Không tìm thấy dữ liệu đơn.")
                         st.stop()
                         
                     row_data = df_edit[mask].iloc[0]

@@ -41,6 +41,25 @@ def register_user(username, password):
         "password": hash_password(password)
     }).execute()
 
+# hàm logo
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+def display_logo(logo_path):
+    if os.path.exists(logo_path):
+        binary_data = get_base64_of_bin_file(logo_path)
+        st.markdown(
+            f"""
+            <div style="text-align: center;">
+                <img src="data:image/png;base64,{binary_data}" width="150">
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
 #========================
 #SECTION 3. COOKIE MANAGER & AUTH CONSTANT
 #========================
@@ -157,6 +176,8 @@ if not st.session_state.get("authenticated"):
 def login_logic():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
+        # Gọi hàm này ngay trên st.title("Đăng nhập")
+        display_logo("LOGO.png")
         st.markdown("<h3 style='text-align: center;'>🔐 Đăng nhập hệ thống</h3>", unsafe_allow_html=True)
         with st.form("login_form_main"):
             u_in = st.text_input("Tên tài khoản").lower().strip()
@@ -192,7 +213,7 @@ def login_logic():
                     time.sleep(0.5)
                     st.rerun()
                 else:
-                    st.error("❌ Đăng nhập thất bại")
+                    st.error("❌ Đăng nhập thất bại. Kiểm tra lại tài khoản ")
 
 if not st.session_state.get("authenticated"):
     login_logic()
@@ -203,13 +224,26 @@ if not st.session_state.get("authenticated"):
 #========================
 
 def logout():
-    for k in ["authenticated", "role", "username", "chuc_danh", "ho_ten"]:
-        st.session_state.pop(k, None)
+    # 1. Xóa sạch Session State
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
 
-    if cookies.get("saved_user"):
-        cookies.delete("saved_user")
+    # 2. Xóa Cookie bằng lệnh del (Cách đúng cho EncryptedCookieManager)
+    # Thay vì cookies.delete("remember_user")
+    try:
+        if "remember_user" in cookies:
+            del cookies["remember_user"]
+        if "saved_user" in cookies:
+            del cookies["saved_user"]
+        
+        # Quan trọng: Phải gọi save() sau khi del
         cookies.save()
+    except Exception as e:
+        st.error(f"Lỗi khi xóa cookie: {e}")
 
+    # 3. Chuyển hướng về trang đăng nhập
+    st.success("Đang đăng xuất...")
+    time.sleep(0.5)
     st.rerun()
 
 #========================
@@ -229,21 +263,9 @@ with st.sidebar:
     st.caption(f"💼 **Chức danh:** {chuc_danh}")
     
     # NÚT ĐĂNG XUẤT: Cập nhật logic để xóa triệt để
-    if st.button("🚪 Đăng xuất", use_container_width=True, type="secondary"):
-        # 1. Xóa Cookie lưu trên trình duyệt (Khớp với tên ở dòng 111 trong file của bạn)
-        if "remember_user" in cookies:
-            cookies.delete("remember_user")
+    if st.button("🚪 Đăng xuất", use_container_width=True, type="primary"):
+        logout()
         
-        # 2. Lưu trạng thái cookie ngay lập tức
-            cookies.save()
-        
-        # 3. Xóa sạch Session State
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        
-        st.success("Đang đăng xuất...")
-        time.sleep(0.5)
-        st.rerun()
 
     st.divider()
 

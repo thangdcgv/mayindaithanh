@@ -958,14 +958,14 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             elif user_hien_tai:
                                 # 2. QUYỀN USER (CHỦ ĐƠN): Cho phép xem thông tin đơn đang chờ
                                 if r["trang_thai"] == "Chờ duyệt":
-                                    st.warning("⏳ Đơn của bạn đang trong trạng thái chờ Kế toán phê duyệt.")
+                                    st.warning("⏳ Đơn đang trong trạng thái chờ Kế toán phê duyệt.")
                                 elif r["trang_thai"] == "Từ chối":
                                     st.error(f"❌ Đơn bị từ chối. Lý do: {r.get('ghi_chu_duyet', 'Không có lý do cụ thể')}")
                                 else:
                                     st.success("✅ Đơn đã được duyệt thành công.")
                             else:
                                 # Nếu là Manager (Chỉ xem, không có quyền duyệt tiền)
-                                st.info("ℹ️ Bạn chỉ có quyền giám sát. Quyền Duyệt/Từ chối thuộc về Kế toán.")
+                                st.info("ℹ️ Bạn chỉ có thể xem đơn. Quyền Duyệt/Từ chối thuộc về Kế toán.")
                                     
                         with cr:
                             # --- XỬ LÝ HIỂN THỊ ẢNH ĐỐI SOÁT (BASE64) ---
@@ -981,7 +981,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     st.error(f"⚠️ Lỗi hiển thị ảnh: {e}")
                             else:
                                 st.warning("⚠️ Đơn này không đính kèm ảnh hóa đơn.")
-# --- TAB 3: BÁO CÁO LẮP ĐẶT (TỔI ƯU CHO COOKIE & HIỆU SUẤT) ---
+# --- TAB 3: BÁO CÁO LẮP ĐẶT  ---
     with tabs[-1]:
         # Lấy thông tin từ Session (đã nạp bởi Cookie Manager)
         # Lấy dữ liệu gốc
@@ -1159,7 +1159,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                 # C. Đổi tên cột và Lọc cột hiển thị
                                 map_names = {
-                                    "combo": "Số lượng máy",
+                                    "combo": "Số máy",
                                     "km": "Quãng đường (Km)",
                                     "dia_chi": "Địa chỉ",
                                     "noi_dung": "Địa chỉ" # Dự phòng nếu tên gốc là noi_dung
@@ -1168,7 +1168,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                 desired_columns = [
                                     "STT", "Tên", "Thời Gian", "Số HĐ", "Địa chỉ", 
-                                    "Quãng đường (Km)", "Số lượng máy", "Thành tiền", "Trạng thái", "Lý do"
+                                    "Quãng đường (Km)", "Số máy", "Thành tiền", "Trạng thái", "Lý do"
                                 ]
                                 
                                 # Loại bỏ các cột không cần thiết và cột trùng lặp
@@ -1190,8 +1190,8 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "") if 'Km' in df_export.columns else ""
 
                                 # Chuẩn bị Sheet chính
-                                df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Lý do', 'Trạng thái']]
-                                df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Ghi chú duyệt', 'Tình trạng']
+                                df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Thành tiền', 'Lý do', 'Trạng thái']]
+                                df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Thành tiền', 'Ghi chú duyệt', 'Tình trạng']
 
                                 # Chuẩn bị Sheet Summary (Tổng hợp chi phí)
                                 df_approved = df_display[df_display['Trạng thái'] == 'Đã duyệt'].copy()
@@ -1201,48 +1201,94 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         Tong_Cong=("Thành tiền", "sum") 
                                     ).reset_index()
                                 else:
-                                    df_summary = pd.DataFrame(columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG'])
+                                    df_summary = pd.DataFrame(columns=['NHÂN VIÊN', 'SỐ ĐƠN', 'THÀNH TIỀN'])
                                 
-                                df_summary.columns = ['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
+                                df_summary.columns = ['NHÂN VIÊN', 'SỐ ĐƠN', 'THÀNH TIỀN']
                                 if not df_summary.empty:
+                                    # Tính dòng tổng cộng
                                     total_row = pd.DataFrame(
-                                        [['TỔNG CỘNG', df_summary['Tổng ĐƠN'].sum(), df_summary['Tổng CÔNG'].sum()]], 
-                                        columns=['TÊN', 'Tổng ĐƠN', 'Tổng CÔNG']
+                                        [['TỔNG CỘNG', df_summary['SỐ ĐƠN'].sum(), df_summary['THÀNH TIỀN'].sum()]], 
+                                        columns=['NHÂN VIÊN', 'SỐ ĐƠN', 'THÀNH TIỀN']
                                     )
                                     df_summary = pd.concat([df_summary, total_row], ignore_index=True)
 
-                                # Ghi file Excel bằng XlsxWriter
+                                # --- XỬ LÝ XUẤT FILE EXCEL HOÀN CHỈNH ---
                                 with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
                                     df_main.to_excel(writer, index=False, sheet_name="BaoCao", startrow=3)
+                                    
                                     wb = writer.book
                                     ws = writer.sheets['BaoCao']
-                                    
-                                    # Formats
+
+                                    # --- 1. KHAI BÁO TẤT CẢ FORMATS (Gộp chung 1 chỗ) ---
                                     title_fmt = wb.add_format({'bold': True, 'font_size': 14, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#C6EFCE', 'border': 1})
                                     header_fmt = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#2E75B6', 'font_color': 'white', 'border': 1})
+                                    green_header_fmt = wb.add_format({'bold': True, 'align': 'center', 'valign': 'vcenter', 'bg_color': '#C6EFCE', 'border': 1})
+                                    
                                     cell_fmt = wb.add_format({'border': 1, 'valign': 'vcenter'})
                                     center_fmt = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter'})
+                                    money_fmt = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right', 'valign': 'vcenter'})
                                     
-                                    # Tiêu đề báo cáo
+                                    footer_fmt = wb.add_format({'bold': True, 'bg_color': '#C6EFCE', 'border': 1, 'num_format': '#,##0', 'align': 'right'})
+                                    footer_label_fmt = wb.add_format({'bold': True, 'bg_color': '#C6EFCE', 'border': 1, 'align': 'left'})
+                                    
+                                    note_box_fmt = wb.add_format({'border': 1, 'valign': 'top', 'align': 'left', 'text_wrap': True, 'bg_color': '#C6EFCE', 'font_size': 10})
+
+                                    # --- 2. TIÊU ĐỀ CHÍNH (Đã sửa Merge Range A1:I2) ---
                                     if 'sel_month' not in locals():
                                         sel_month = d_range[0].strftime("%m/%Y")
-                                    
                                     label_time = sel_month if current_role in ["Admin", "System Admin"] else f"{d_range[0].strftime('%d/%m')} - {d_range[1].strftime('%d/%m/%Y')}"
-                                    ws.merge_range('A1:H2', f'BẢNG TỔNG HỢP CÔNG LẮP ĐẶT - {label_time}', title_fmt)
                                     
-                                    # Căn chỉnh độ rộng cột
+                                    ws.merge_range('A1:I2', f'BẢNG TỔNG HỢP CÔNG LẮP ĐẶT - {label_time}', title_fmt)
+
+                                    # --- 3. CĂN CHỈNH CỘT BẢNG CHI TIẾT ---
                                     ws.set_column('A:A', 5, center_fmt)
                                     ws.set_column('B:B', 12, center_fmt)
                                     ws.set_column('C:C', 35, cell_fmt)
                                     ws.set_column('D:D', 20, cell_fmt)
                                     ws.set_column('E:F', 10, center_fmt)
-                                    ws.set_column('G:G', 20, cell_fmt)
-                                    ws.set_column('H:H', 15, center_fmt)
+                                    ws.set_column('G:G', 15, money_fmt)
+                                    ws.set_column('H:H', 20, cell_fmt)
+                                    ws.set_column('I:I', 15, center_fmt)
 
-                                    # Ghi bảng tổng hợp
-                                    summary_start_col = 10
-                                    ws.write(3, summary_start_col, "TỔNG HỢP CHI PHÍ", title_fmt)
-                                    df_summary.to_excel(writer, index=False, sheet_name="BaoCao", startrow=4, startcol=summary_start_col)
+                                    # --- 4. XỬ LÝ VÙNG TỔNG HỢP (Cột L trở đi) ---
+                                    summary_start_col = 11 
+                                    
+                                    # Xóa trắng vùng cũ để tránh lỗi "đè" chữ
+                                    for r in range(3, 25):
+                                        for c in range(summary_start_col, summary_start_col + 3):
+                                            ws.write(r, c, None)
+
+                                    # Ghi Ghi chú
+                                    note_text = ("Ghi chú chính sách phụ cấp:\n"
+                                                "- Phụ cấp 30k/ máy đối với đơn đi từ 20km trở xuống\n"
+                                                "- Phụ cấp 50k/ máy đối với đơn từ 21km – 30km hoặc máy ép nhiệt khí nén.\n"
+                                                "- Phụ cấp 70k/ máy đối với đơn từ 31 – 40km\n"
+                                                "- Phụ cấp 80k/ máy đối với đơn từ 41 – 50km. Đối với mỗi km kế tiếp từ 51km +\n"
+                                                "tính thêm 5k/1km vượt mức tính\n"
+                                                "- Đối với các máy khổ lớn hoặc đơn tính sẽ tính theo thỏa thuận.")
+                                    ws.merge_range(3, summary_start_col, 8, summary_start_col + 2, note_text, note_box_fmt)
+
+                                    # Ghi Bảng Tổng Hợp
+                                    summary_header_row = 10
+                                    ws.write(summary_header_row, summary_start_col, "TÊN", green_header_fmt)
+                                    ws.write(summary_header_row, summary_start_col + 1, "TỔNG ĐƠN", green_header_fmt)
+                                    ws.write(summary_header_row, summary_start_col + 2, "TỔNG TIỀN", green_header_fmt)
+
+                                    for i, row in enumerate(df_summary.values):
+                                        curr_r = summary_header_row + 1 + i
+                                        is_last = (i == len(df_summary) - 1)
+                                        
+                                        if is_last:
+                                            ws.write(curr_r, summary_start_col, row[0], footer_label_fmt)
+                                            ws.write(curr_r, summary_start_col + 1, row[1], footer_fmt)
+                                            ws.write(curr_r, summary_start_col + 2, row[2], footer_fmt)
+                                        else:
+                                            ws.write(curr_r, summary_start_col, row[0], cell_fmt)
+                                            ws.write(curr_r, summary_start_col + 1, row[1], center_fmt)
+                                            ws.write(curr_r, summary_start_col + 2, row[2], money_fmt)
+
+                                    ws.set_column(summary_start_col, summary_start_col, 25)
+                                    ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
 
                                 # NÚT TẢI EXCEL
                                 c_exp.download_button(

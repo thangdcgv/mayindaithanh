@@ -1,7 +1,8 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
+from datetime import datetime, time
 import os
 import hashlib
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 import plotly.express as px
 from streamlit_cookies_manager import EncryptedCookieManager
 import calendar 
+import pytz
 
 
 st.set_page_config(
@@ -307,27 +309,35 @@ def get_attendance_report(target_username, filter_month=None):
             .select("thoi_gian, trang_thai_lam, ghi_chu") \
             .eq("username", target_username)
         
-        # 2. Lọc theo tháng nếu có (Sử dụng lọc chuỗi tương đương LIKE trong SQL)
         if filter_month:
-            # Giả định định dạng thoi_gian là YYYY-MM-DD...
             query = query.gte("thoi_gian", f"{filter_month}-01") \
-                         .lte("thoi_gian", f"{filter_month}-31")
+                         .lte("thoi_gian", f"{filter_month}-31T23:59:59")
         
-        # 3. Thực thi truy vấn và sắp xếp
         res = query.order("thoi_gian", desc=True).execute()
-        
-        # Chuyển đổi dữ liệu trả về thành DataFrame
         df = pd.DataFrame(res.data)
         
     except Exception as e:
         st.error(f"Lỗi khi truy vấn báo cáo từ Supabase: {e}")
         return pd.DataFrame()
+
     if df.empty: 
         return pd.DataFrame()
     
-    # --- Logic tính toán giữ nguyên theo code của bạn ---
+    # Định nghĩa múi giờ địa phương
+    local_tz = pytz.timezone('Asia/Ho_Chi_Minh')
+    
+    # Chuyển đổi thoi_gian và đảm bảo có múi giờ
     df['thoi_gian'] = pd.to_datetime(df['thoi_gian'])
+    
+    # Ép thoi_gian về múi giờ Việt Nam nếu dữ liệu thô từ DB là UTC
+    def localize_time(dt):
+        if dt.tzinfo is None:
+            return local_tz.localize(dt)
+        return dt.astimezone(local_tz)
+
+    df['thoi_gian'] = df['thoi_gian'].apply(localize_time)
     df['ngay'] = df['thoi_gian'].dt.date
+    
     summary = []
     for date_val, group in df.groupby('ngay', sort=False):
         # 1. Xử lý nghỉ
@@ -351,11 +361,16 @@ def get_attendance_report(target_username, filter_month=None):
         ghi_chu_hien_thi = ""
         
         if pd.notnull(v_time) and pd.notnull(r_time):
-            import datetime as dt_lib 
-            lunch_start = dt_lib.datetime.combine(date_val, dt_lib.time(12, 0))
-            lunch_end = dt_lib.datetime.combine(date_val, dt_lib.time(13, 30))      
+          # Đầu file hoặc đầu hàm phải có:
+            from datetime import datetime, time
+
+            # Đoạn code sửa lại:
+            lunch_start = local_tz.localize(datetime.combine(date_val, time(12, 0)))
+            lunch_end = local_tz.localize(datetime.combine(date_val, time(13, 30)))
             
             total_seconds = (r_time - v_time).total_seconds()
+            
+            # Bây giờ cả v_time, r_time và lunch đều là "offset-aware" (có múi giờ)
             overlap_start = max(v_time, lunch_start)
             overlap_end = min(r_time, lunch_end)
             
@@ -364,14 +379,14 @@ def get_attendance_report(target_username, filter_month=None):
                 lunch_break_seconds = (overlap_end - overlap_start).total_seconds()
             
             actual_seconds = total_seconds - lunch_break_seconds
-            tong_gio = round(actual_seconds / 3600, 2)
+            tong_gio = max(0, round(actual_seconds / 3600, 2))
             
             if tong_gio < 3.5: 
-                loai_cong = "Không tính công"; ghi_chu_hien_thi = "Chấm công sai"
+                loai_cong = "Không tính công"; ghi_chu_hien_thi = "Chấm công chưa đủ giờ"
             elif 3.5 <= tong_gio < 7: 
-                loai_cong = "1/2 ngày"; ghi_chu_hien_thi = "Nửa ngày"
+                loai_cong = "1/2 ngày"; ghi_chu_hien_thi = "Nửa ngày công"
             elif tong_gio >= 7: 
-                loai_cong = "Ngày"; ghi_chu_hien_thi = "Một ngày"
+                loai_cong = "Ngày"; ghi_chu_hien_thi = "Một ngày công"
                 
         elif pd.notnull(v_time) and pd.isnull(r_time):
             loai_cong = "Đang làm"; ghi_chu_hien_thi = "Chưa kết thúc"
@@ -387,10 +402,11 @@ def get_attendance_report(target_username, filter_month=None):
             "Loại công": loai_cong,
             "Ghi chú": final_note
         })
-    res = pd.DataFrame(summary)
-    if not res.empty: 
-        res.insert(0, 'STT', range(1, len(res) + 1))
-    return res
+
+    res_df = pd.DataFrame(summary)
+    if not res_df.empty: 
+        res_df.insert(0, 'STT', range(1, len(res_df) + 1))
+    return res_df
 # CẢI TIẾN QUAN TRỌNG: Cache tách biệt theo UserID
 @st.cache_data(ttl=300)
 def get_attendance_report_cached(current_user, month=None):
@@ -1128,7 +1144,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             
                             # 2. TRÍCH XUẤT DỮ LIỆU SAU LỌC
                             df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
-                            
+
                             if df_display.empty:
                                 st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
                             else:
@@ -1140,7 +1156,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 # --- XỬ LÝ GIAO DIỆN BẢNG HIỂN THỊ (df_view) ---
                                 df_view = df_display.copy()
 
-                                # A. Định dạng múi giờ Việt Nam và Ngày/Tháng/Năm Giờ:Phút
+                                # A. Định dạng múi giờ Việt Nam và Ngày/Tháng/Năm Giờ:Phút (Loại bỏ +00:00)
                                 if 'Thời Gian' in df_view.columns:
                                     df_view['Thời Gian'] = pd.to_datetime(df_view['Thời Gian'])
                                     try:
@@ -1150,11 +1166,12 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                             df_view['Thời Gian'] = df_view['Thời Gian'].dt.tz_convert('Asia/Ho_Chi_Minh')
                                     except:
                                         df_view['Thời Gian'] = df_view['Thời Gian'] + pd.Timedelta(hours=7)
+                                    
+                                    # Định dạng chuỗi sạch sẽ để hiển thị
                                     df_view['Thời Gian'] = df_view['Thời Gian'].dt.strftime('%d/%m/%Y %H:%M')
 
-                                # B. Thêm cột STT tự động tăng dần
-                                if 'STT' in df_view.columns:
-                                    df_view = df_view.drop(columns=['STT'])
+                                # B. Thêm cột STT tự động
+                                df_view = df_view.reset_index(drop=True)
                                 df_view.insert(0, "STT", range(1, len(df_view) + 1))
 
                                 # C. Đổi tên cột và Lọc cột hiển thị
@@ -1162,7 +1179,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     "combo": "Số máy",
                                     "km": "Quãng đường (Km)",
                                     "dia_chi": "Địa chỉ",
-                                    "noi_dung": "Địa chỉ" # Dự phòng nếu tên gốc là noi_dung
+                                    "noi_dung": "Địa chỉ"
                                 }
                                 df_view = df_view.rename(columns=map_names)
 
@@ -1170,12 +1187,71 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     "STT", "Tên", "Thời Gian", "Số HĐ", "Địa chỉ", 
                                     "Quãng đường (Km)", "Số máy", "Thành tiền", "Trạng thái", "Lý do"
                                 ]
-                                
-                                # Loại bỏ các cột không cần thiết và cột trùng lặp
                                 final_cols = [c for c in desired_columns if c in df_view.columns]
+                                df_final = df_view[final_cols]
+
+                                # --- 🚀 LOGIC PHÂN TRANG (PAGINATION) ---
+                                items_per_page = 10
+                                total_rows = len(df_final)
+                                total_pages = (total_rows // items_per_page) + (1 if total_rows % items_per_page > 0 else 0)
+
+                                # Khởi tạo hoặc kiểm tra session_state cho phân trang
+                                if 'current_page' not in st.session_state:
+                                    st.session_state.current_page = 1
                                 
-                                # Hiển thị bảng lên UI
-                                st.dataframe(df_view[final_cols], use_container_width=True, hide_index=True)
+                                # Đảm bảo trang hiện tại không vượt quá tổng số trang sau khi lọc
+                                if st.session_state.current_page > total_pages:
+                                    st.session_state.current_page = max(1, total_pages)
+
+                                # Cắt dữ liệu hiển thị theo trang
+                                start_idx = (st.session_state.current_page - 1) * items_per_page
+                                end_idx = start_idx + items_per_page
+                                df_page = df_final.iloc[start_idx:end_idx]
+
+                                # Hiển thị bảng (Chỉ 10 dòng)
+                                st.dataframe(df_page, use_container_width=True, hide_index=True)
+
+                                # --- BỘ CHUYỂN TRANG ---
+                            
+                                if total_pages > 1:
+                                    st.write("") 
+                                    
+                                    # CSS để ép các cột không bị nhảy dòng trên điện thoại
+                                    st.markdown("""
+                                        <style>
+                                        [data-testid="column"] {
+                                            width: calc(33.3333% - 1rem) !important;
+                                            flex: 1 1 calc(33.3333% - 1rem) !important;
+                                            min-width: calc(33.3333% - 1rem) !important;
+                                        }
+                                        </style>
+                                        """, unsafe_allow_html=True)
+
+                                    # Sử dụng gap="extra_small" để tiết kiệm diện tích tối đa
+                                    page_col1, page_col2, page_col3 = st.columns([1, 1, 1], gap="small")
+                                    
+                                    with page_col1:
+                                        if st.button("⬅️ Trước", use_container_width=True, disabled=(st.session_state.current_page == 1)):
+                                            st.session_state.current_page -= 1
+                                            st.rerun()
+
+                                    with page_col2:
+                                        # Căn chỉnh số trang nằm giữa và ngang hàng với nút
+                                        st.markdown(
+                                            f"""
+                                            <div style='text-align: center; line-height: 40px; font-weight: bold; font-size: 14px; white-space: nowrap;'>
+                                                {st.session_state.current_page} / {total_pages}
+                                            </div>
+                                            """, 
+                                            unsafe_allow_html=True
+                                        )
+                                    
+                                    with page_col3:
+                                        if st.button("Sau ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages)):
+                                            st.session_state.current_page += 1
+                                            st.rerun()
+
+                                # --- NÚT XUẤT EXCEL (Giữ nguyên logic cũ của bạn ở phần dưới c_exp) ---
 
                                 # --- XỬ LÝ XUẤT FILE EXCEL ---
                                 out = io.BytesIO()
@@ -1305,7 +1381,6 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
 
         # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
-        st.divider()
         # Lấy thông tin từ Cookie/Session
         user_login = st.session_state.get("username"," ")
         role_login = st.session_state.get("role")

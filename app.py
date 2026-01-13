@@ -823,7 +823,7 @@ if menu == "🕒 Chấm công đi làm":
                             # Gán nhãn đặc biệt nếu được tích chọn
                             if special_request:
                                 final_reason = f"[ĐẶC BIỆT] {base_reason}"
-                            else base_reason:
+                            else: base_reason
 
                             if not isinstance(range_date, tuple) or len(range_date) != 2:
                                 st.error("Vui lòng chọn đủ ngày bắt đầu và kết thúc!")

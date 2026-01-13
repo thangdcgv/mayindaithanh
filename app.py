@@ -813,16 +813,17 @@ if menu == "🕒 Chấm công đi làm":
 
                         if submit:
                             # 3. Xử lý logic gộp lý do chi tiết
-                            final_reason = reason_main
+                            base_reason = reason_main
                             if reason_main == "Khác":
                                 if not other_reason.strip():
                                     st.error("⚠️ Bạn đã chọn 'Khác', vui lòng nhập lý do chi tiết ở ô phía trên!")
                                     st.stop()
-                                final_reason = other_reason.strip()
+                            base_reason = other_reason.strip()
                             
                             # Gán nhãn đặc biệt nếu được tích chọn
                             if special_request:
-                                final_reason = f"[ĐẶC BIỆT] {final_reason}"
+                                final_reason = f"[ĐẶC BIỆT] {base_reason}"
+                            else base_reason
 
                             if not isinstance(range_date, tuple) or len(range_date) != 2:
                                 st.error("Vui lòng chọn đủ ngày bắt đầu và kết thúc!")

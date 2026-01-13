@@ -1,11 +1,11 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
-from datetime import datetime, date
-from datetime import datetime, time
+from datetime import datetime, date, time, timedelta
 import os
 import hashlib
 import time
+import datetime as dt_module 
 import io
 import base64
 from PIL import Image
@@ -140,32 +140,48 @@ DEFAULT_SESSION = {
     "username": "",
     "role": "",
     "chuc_danh": "",
-    "ho_ten": ""
+    "ho_ten": "",
+    "pending_nghi": None  
 }
 
 for k, v in DEFAULT_SESSION.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-#========================
-#SECTION 6. AUTO LOGIN FROM COOKIE
-#========================
+def format_vietnam_time(df):
+    # Thiết lập múi giờ
+    tz_vn = pytz.timezone('Asia/Ho_Chi_Minh')
+    
+    # 1. Định dạng Ngày nghỉ (Chỉ lấy ngày/tháng/năm)
+    if 'ngay_nghi' in df.columns:
+        df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi']).dt.strftime('%d/%m/%Y')
+    
+    # 2. Định dạng Thời gian tạo đơn (Ngày/Tháng/Năm Giờ:Phút)
+    if 'created_at' in df.columns:
+        # Chuyển sang datetime -> áp múi giờ UTC -> đổi sang múi giờ VN
+        df['created_at'] = pd.to_datetime(df['created_at']).dt.tz_convert(tz_vn)
+        df['created_at'] = df['created_at'].dt.strftime('%d/%m/%Y %H:%M')
+        
+    return df
+# ========================
+# SECTION 6. AUTO LOGIN (CẬP NHẬT AN TOÀN)
+# ========================
 
-# Kiểm tra tự động đăng nhập từ Cookie
-if not st.session_state.get("authenticated"):
+# Chỉ tự động đăng nhập nếu Session chưa được xác thực
+if not st.session_state.get("authenticated", False):
     saved_user = cookies.get("saved_user")
-    if saved_user:
-    # Truy vấn thông tin từ Supabase dựa trên username lưu trong Cookie
+    
+    # Kiểm tra kỹ: cookie phải tồn tại, không rỗng, và không phải 'None' (chuỗi)
+    if saved_user and saved_user != "None" and saved_user != "": 
         res = check_login_by_username(saved_user) 
         
         if res:
-            # THAY ĐỔI: Sử dụng Key (tên cột) vì Supabase trả về dạng Dictionary
             st.session_state.update({
                 "authenticated": True,
-                "role": res.get('role'),         # Thay cho res[0]
-                "username": res.get('username'), # Thay cho res[1]
-                "chuc_danh": res.get('chuc_danh'),# Thay cho res[2]
-                "ho_ten": res.get('ho_ten')       # Thay cho res[3]
+                "role": res.get('role'),
+                "username": res.get('username'),
+                "chuc_danh": res.get('chuc_danh'),
+                "ho_ten": res.get('ho_ten')
             })
             st.rerun()
 
@@ -219,30 +235,24 @@ if not st.session_state.get("authenticated"):
     login_logic()
     st.stop()
 
-#========================
-#SECTION 8. LOGOUT
-#========================
+# ========================
+# SECTION 8. LOGOUT 
+# ========================
 
 def logout():
-    # 1. Xóa sạch Session State
+    # Xóa Cookie trước để tránh Section 6 tự log lại
+    cookies["saved_user"] = "" 
+    cookies.save()
+
+    # Xóa Session
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-
-    # 2. Xóa Cookie bằng lệnh del (Cách đúng cho EncryptedCookieManager)
-    # Thay vì cookies.delete("remember_user")
-    try:
-        if "remember_user" in cookies:
-            del cookies["remember_user"]
-        if "saved_user" in cookies:
-            del cookies["saved_user"]
-        
-        # Quan trọng: Phải gọi save() sau khi del
-        cookies.save()
-    except Exception as e:
-        st.error(f"Lỗi khi xóa cookie: {e}")
-
-    # 3. Chuyển hướng về trang đăng nhập
-    st.success("Đang đăng xuất...")
+    
+    # Khởi tạo lại ĐÚNG biến authenticated
+    st.session_state.authenticated = False 
+    st.session_state.pending_nghi = None 
+    
+    st.success("Đăng xuất thành công!")
     time.sleep(0.5)
     st.rerun()
 
@@ -257,7 +267,7 @@ ho_ten = st.session_state.get("ho_ten", "Nhân viên")
 chuc_danh = st.session_state.get("chuc_danh", "N/A")
 
 with st.sidebar:
-    # Hiển thị thông tin nhân viên chuyên nghiệp hơn
+
     st.markdown(f"### 👤 Chào: {ho_ten}")
     st.info(f"🎭 **Quyền:** {role}")
     st.caption(f"💼 **Chức danh:** {chuc_danh}")
@@ -266,18 +276,15 @@ with st.sidebar:
     if st.button("🚪 Đăng xuất", use_container_width=True, type="primary"):
         logout()
         
-
     st.divider()
 
     
     # MENU CHỨC NĂNG
     st.markdown("### 🛠️ MENU CHỨC NĂNG")
     
-    # Chỉ hiện "Quản trị hệ thống" cho Admin/System Admin
-    menu_options = ["📦 Giao hàng - Lắp đặt", "🕒 Chấm công đi làm"]
-    if role in ["Admin", "System Admin"]:
-        menu_options.append("⚙️ Quản trị hệ thống")
-    
+    # Cho phép tất cả mọi người thấy Quản trị hệ thống (để đổi mật khẩu)
+    menu_options = ["📦 Giao hàng - Lắp đặt", "🕒 Chấm công đi làm", "⚙️ Quản trị hệ thống"]
+
     menu = st.radio(
         "Chọn mục làm việc:", 
         options=menu_options,
@@ -443,19 +450,27 @@ if menu == "🕒 Chấm công đi làm":
     user = st.session_state.get("username")
     ho_ten = st.session_state.get("ho_ten")
 
-    if role in ["Admin", "System Admin"]:
-        tabs = st.tabs(["📍 Chấm công", "🛠️ Quản lý & Sửa công", "📊 Báo cáo chấm công"])
-    else:
-        tabs = st.tabs(["📍 Chấm công"])
 
-    # --- TAB 1: DÀNH CHO NHÂN VIÊN ---
+    tabs = st.tabs(["📍 Chấm công", "🛠️ Quản lý & Sửa công", "📊 Báo cáo chấm công", "📅 Đăng ký lịch nghỉ"])
+    
+
+    # =========================================================
+    # PHÂN QUYỀN CHUNG
+    # =========================================================
+    ROLE_USER = ["User", "Manager"]
+    ROLE_ADMIN = ["Admin"]
+    ROLE_SYS = ["System Admin"]
+
+    # =========================================================
+    # TAB 1 – NHÂN VIÊN (CHẤM CÔNG)
+    # =========================================================
     with tabs[0]:
-        # Không cần truy vấn SQL lấy ho_ten nữa vì đã có trong Session
+
         if role == "System Admin":
             st.info("💡 Sếp trả lương cho nhân viên là công đức vô lượng rồi, không cần chấm công.")
         else:
             st.markdown(f"##### ⏰ Chấm công: {ho_ten}")
-            
+                
             # Sử dụng múi giờ Việt Nam
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
@@ -574,12 +589,15 @@ if menu == "🕒 Chấm công đi làm":
                     
             except Exception as e:
                 st.error(f"Lỗi hệ thống khi tải dữ liệu chấm công: {e}")
+            
 
-        # --- TAB 2: QUẢN LÝ & SỬA CÔNG (ADMIN) ---
-    if role in ["Admin", "System Admin"]:
+    # =========================================================
+    # TAB 2 – ĐIỀU CHỈNH CÔNG (ADMIN + SYSTEM ADMIN)
+    # =========================================================
+    if role in ROLE_ADMIN + ROLE_SYS:
         with tabs[1]:
             st.markdown("#### 🛠️ Điều chỉnh công nhân viên")
-            # Lấy thông tin Admin hiện tại từ session
+    # Lấy thông tin Admin hiện tại từ session
             current_admin = st.session_state.get("username")
             
             # 1. Lấy danh sách nhân viên từ Supabase
@@ -685,12 +703,472 @@ if menu == "🕒 Chấm công đi làm":
                     except Exception as e:
                         st.error(f"Lỗi: {e}")
 
-        # --- TAB 3: BÁO CÁO TỔNG HỢP (ADMIN) ---
-    if role in ["Admin", "System Admin"]:
+    # =========================================================
+    # TAB 3 – ĐĂNG KÝ LỊCH NGHỈ (TẤT CẢ USER ĐỀU VÀO ĐƯỢC)
+    # =========================================================
+    with tabs[-1]:
+
+        with st.expander("🔍 Xem lịch nghỉ chi tiết trong tháng", expanded=True):
+            # --- KHU VỰC GHI CHÚ (LEGEND) ---
+            st.markdown("""
+            <div style="display: flex; gap: 20px; margin-bottom: 10px; font-size: 14px;">
+                <span>📌 <b>Ký hiệu:</b></span>
+                <span><b>OFF</b>: Ngày</span>
+                <span><b>1/2S</b>: Sáng</span>
+                <span><b>1/2C</b>: Chiều</span>
+                <span><b>( )</b>: Chờ duyệt</span>
+            </div>
+            <div style="display: flex; gap: 20px; margin-bottom: 20px; font-size: 14px;">
+                <span>🎨 <b>Màu sắc:</b></span>
+                <span style="color: #ff4b4b;">■ Đỏ: Cả ngày</span>
+                <span style="color: #ffa500;">■ Cam: Nửa buổi</span>
+            </div>
+            """, unsafe_allow_html =True)
+            try:
+                # SỬA 1: Lấy tất cả trừ đơn bị từ chối (Lấy đơn Đã duyệt và Chờ duyệt)
+                res_nghi = supabase.table("dang_ky_nghi").select("*").neq("trang_thai", "Bị từ chối").execute()
+                
+                if res_nghi.data:
+                    df_all = pd.DataFrame(res_nghi.data)
+                    df_all['ngay_nghi'] = pd.to_datetime(df_all['ngay_nghi'])
+                    
+                    today = date.today()
+                    curr_month, curr_year = today.month, today.year
+                    last_day = calendar.monthrange(curr_year, curr_month)[1]
+                    all_days = list(range(1, last_day + 1))
+                    
+                    df_month = df_all[(df_all['ngay_nghi'].dt.month == curr_month) & (df_all['ngay_nghi'].dt.year == curr_year)].copy()
+                    
+                    if not df_month.empty:
+                        df_month['Ngày'] = df_month['ngay_nghi'].dt.day
+                        
+                        # SỬA 2: Hàm map_symbol nhận vào cả dòng dữ liệu (Series)
+                        def map_symbol(row):
+                            symbol = ""
+                            if row['buoi_nghi'] == "Cả ngày": symbol = "OFF"
+                            elif row['buoi_nghi'] == "Sáng": symbol = "1/2S"
+                            elif row['buoi_nghi'] == "Chiều": symbol = "1/2C"
+                            
+                            # Hiển thị dấu ngoặc đơn nếu đơn vẫn đang chờ duyệt
+                            if row['trang_thai'] == "Chờ duyệt":
+                                return f"({symbol})" 
+                            return symbol
+
+                        # SỬA 3: Pivot Table truyền toàn bộ dòng vào aggfunc
+                        # Để map_symbol truy cập được 'buoi_nghi' và 'trang_thai'
+                        pivot_nghi = df_month.pivot_table(
+                            index='ho_ten',
+                            columns='Ngày',
+                            # Không chỉ lấy values='buoi_nghi' mà để pivot xử lý trên dataframe
+                            aggfunc=lambda x: map_symbol(df_month.loc[x.index[0]]) if not x.empty else ""
+                        )['buoi_nghi'] # Lấy kết quả cột buoi_nghi sau khi đã map
+                        
+                        for d in all_days:
+                            if d not in pivot_nghi.columns: pivot_nghi[d] = ""
+                        
+                        pivot_nghi = pivot_nghi[all_days].fillna("")
+                        pivot_nghi.index.name = "Họ và Tên"
+
+                        def style_leave(val):
+                            if 'OFF' in str(val): return 'background-color: #ff4b4b; color: white'
+                            if '1/2S' in str(val) or '1/2C' in str(val): return 'background-color: #ffa500; color: white'
+                            return ''
+
+                        st.dataframe(pivot_nghi.style.applymap(style_leave), use_container_width=True)
+                    else:
+                        st.info("Chưa có dữ liệu nghỉ tháng này.")
+            except Exception as e:
+                st.error(f"Lỗi tải lịch: {e}")
+
+        st.divider()
+
+        # 2. KHU VỰC USER – ĐĂNG KÝ + LỊCH SỬ
+        if role != "System Admin":
+            with st.expander("✨ Đăng ký & Theo dõi lịch nghỉ", expanded=True):
+                col_left, col_right = st.columns([2, 3])
+
+                with col_left:
+                    st.markdown("#### 📝 Tạo đơn mới")
+                    
+                    # 1. Đưa Selectbox ra ngoài form để giao diện phản ứng tức thì khi chọn "Khác"
+                    reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])
+                    
+                    # 2. Chỉ hiện ô nhập văn bản khi chọn "Khác"
+                    other_reason = ""
+                    if reason_main == "Khác":
+                        other_reason = st.text_input("👉 Vui lòng ghi rõ lý do:", placeholder="Nhập lý do của bạn tại đây...")
+
+                    if "pending_nghi" not in st.session_state:
+                        st.session_state.pending_nghi = None
+
+                    with st.form("form_dang_ky_nghi_vertical", clear_on_submit=True):
+                        # Mặc định gợi ý quy tắc nghỉ trước 24h
+                        range_date = st.date_input("Khoảng thời gian nghỉ", 
+                                                value=(date.today() + timedelta(days=1), date.today() + timedelta(days=1)), 
+                                                format="DD/MM/YYYY")
+                        session_off = st.selectbox("Buổi nghỉ", ["Cả ngày", "Sáng", "Chiều"])
+                        special_request = st.checkbox("Gửi thông báo đặc biệt (Nghỉ quá 2 ngày/tháng hoặc lý do khẩn cấp)")
+                        
+                        submit = st.form_submit_button("GỬI ĐƠN", use_container_width=True, type="primary")
+
+                        if submit:
+                            # 3. Xử lý logic gộp lý do chi tiết
+                            final_reason = reason_main
+                            if reason_main == "Khác":
+                                if not other_reason.strip():
+                                    st.error("⚠️ Bạn đã chọn 'Khác', vui lòng nhập lý do chi tiết ở ô phía trên!")
+                                    st.stop()
+                                final_reason = other_reason.strip()
+                            
+                            # Gán nhãn đặc biệt nếu được tích chọn
+                            if special_request:
+                                final_reason = f"[ĐẶC BIỆT] {final_reason}"
+
+                            if not isinstance(range_date, tuple) or len(range_date) != 2:
+                                st.error("Vui lòng chọn đủ ngày bắt đầu và kết thúc!")
+                            else:
+                                start_date, end_date = range_date
+                                now = datetime.now()
+                                
+                                # Kiểm tra đăng ký trước 24h (00:00 ngày nghỉ so với hiện tại)
+                                start_datetime = datetime.combine(start_date, dt_module.time.min)
+                                if start_datetime < now + timedelta(hours=24):
+                                    st.error("❌ Bạn phải đăng ký nghỉ tối thiểu trước 24h!")
+                                else:
+                                    try:
+                                        # 4. Truy vấn loại trừ các đơn "Bị từ chối" để cho phép đăng ký lại
+                                        res_check = supabase.table("dang_ky_nghi").select("*")\
+                                            .neq("trang_thai", "Bị từ chối")\
+                                            .execute()
+                                        df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
+
+                                        # Kiểm tra giới hạn 2 ngày/tháng
+                                        month_now, year_now = start_date.month, start_date.year
+                                        user_days_this_month = 0
+                                        if not df_check.empty:
+                                            user_month_data = df_check[
+                                                (df_check['username'] == st.session_state.username) & 
+                                                (pd.to_datetime(df_check['ngay_nghi']).dt.month == month_now) &
+                                                (pd.to_datetime(df_check['ngay_nghi']).dt.year == year_now)
+                                            ]
+                                            user_days_this_month = len(user_month_data)
+
+                                        data_to_insert, data_to_update = [], []
+                                        error_overlap_colleague, own_overlap_days = [], []
+                                        error_sunday = []
+                                        
+                                        num_new_days = (end_date - start_date).days + 1
+
+                                        for i in range(num_new_days):
+                                            curr_day = start_date + timedelta(days=i)
+                                            curr_day_str = curr_day.isoformat()
+
+                                            if not df_check.empty:
+                                                # Kiểm tra trùng chính mình (chỉ tính đơn chưa bị từ chối)
+                                                own = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['username'] == st.session_state.username)]
+                                                if not own.empty:
+                                                    own_overlap_days.append(curr_day.strftime('%d/%m/%Y'))
+                                                    data_to_update.append({
+                                                        "id": own.iloc[0]['id'], 
+                                                        "buoi_nghi": session_off, 
+                                                        "ly_do": final_reason, # Dùng lý do mới
+                                                        "trang_thai": "Chờ duyệt"
+                                                    })
+                                                    continue 
+
+                                                # Kiểm tra trùng đồng nghiệp
+                                                colleague = df_check[(df_check['ngay_nghi'] == curr_day_str) & 
+                                                                    (df_check['nhom'] == st.session_state.chuc_danh) & 
+                                                                    (df_check['username'] != st.session_state.username)]
+                                                if not colleague.empty:
+                                                    error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} ({', '.join(colleague['ho_ten'].tolist())})")
+
+                                            data_to_insert.append({
+                                                "username": st.session_state.username, 
+                                                "ho_ten": st.session_state.ho_ten, 
+                                                "nhom": st.session_state.chuc_danh, 
+                                                "ngay_nghi": curr_day_str, 
+                                                "buoi_nghi": session_off, 
+                                                "ly_do": final_reason, 
+                                                "trang_thai": "Chờ duyệt"
+                                            })
+
+                                        # Hiển thị lỗi theo thứ tự ưu tiên
+                                        
+                                        if (user_days_this_month + num_new_days) > 2 and not special_request:
+                                            st.error(f"❌ Bạn đã nghỉ {user_days_this_month} ngày. Hãy tích chọn 'Thông báo đặc biệt' để đăng ký thêm.")
+                                        elif error_overlap_colleague:
+                                            st.error(f"❌ Trùng lịch nhóm {st.session_state.chuc_danh}: {', '.join(error_overlap_colleague)}")
+                                        elif own_overlap_days:
+                                            st.session_state.pending_nghi = {"days": own_overlap_days, "to_update": data_to_update, "to_insert": data_to_insert}
+                                        else:
+                                            if data_to_insert:
+                                                supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
+                                                st.success("✅ Gửi đơn thành công!")
+                                                time.sleep(1)
+                                                st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Lỗi: {e}")
+
+                    # XỬ LÝ CẬP NHẬT TRÙNG LỊCH
+                    if st.session_state.pending_nghi:
+                        pending = st.session_state.pending_nghi
+                        st.warning(f"🔔 Bạn đã có lịch nghỉ vào ngày: {', '.join(pending['days'])}. Cập nhật lại?")
+                        c_u1, c_u2 = st.columns(2)
+                        if c_u1.button("🔄 Cập nhật", use_container_width=True, type="primary"):
+                            for item in pending['to_update']:
+                                id_up = item.pop('id')
+                                # Thêm prefix đặc biệt nếu có tích chọn
+                                if special_request: item['ly_do'] = f"[ĐẶC BIỆT] {item['ly_do']}"
+                                supabase.table("dang_ky_nghi").update(item).eq("id", id_up).execute()
+                            if pending['to_insert']:
+                                supabase.table("dang_ky_nghi").insert(pending['to_insert']).execute()
+                            st.session_state.pending_nghi = None
+                            st.success("✅ Đã cập nhật!")
+                            time.sleep(1)
+                            st.rerun()
+                        if c_u2.button("❌ Hủy", use_container_width=True):
+                            st.session_state.pending_nghi = None
+                            st.rerun()
+
+                # --- PHÍA BÊN PHẢI: LỊCH SỬ ĐƠN (GOM NHÓM) ---
+                with col_right:
+                    st.markdown("#### 🕒 Lịch sử đơn của bạn")
+                    
+                    res_history = supabase.table("dang_ky_nghi")\
+                        .select("*")\
+                        .eq("username", st.session_state.username)\
+                        .order("ngay_nghi", desc=True).execute()
+
+                    if res_history.data:
+                        df_hist = pd.DataFrame(res_history.data)
+                        df_hist['ngay_nghi'] = pd.to_datetime(df_hist['ngay_nghi'])
+                        
+                        # Logic gom nhóm các ngày liên tiếp có cùng trạng thái và lý do
+                        df_hist = df_hist.sort_values(by='ngay_nghi')
+                        groups = []
+                        if not df_hist.empty:
+                            current_group = [df_hist.iloc[0]]
+                            for i in range(1, len(df_hist)):
+                                prev = df_hist.iloc[i-1]
+                                curr = df_hist.iloc[i]
+                                
+                                # Nếu ngày liên tiếp và cùng trạng thái/buổi nghỉ/lý do -> Gom nhóm
+                                diff = (curr['ngay_nghi'] - prev['ngay_nghi']).days
+                                if diff == 1 and curr['trang_thai'] == prev['trang_thai'] and curr['buoi_nghi'] == prev['buoi_nghi']:
+                                    current_group.append(curr)
+                                else:
+                                    groups.append(current_group)
+                                    current_group = [curr]
+                            groups.append(current_group)
+
+                        # Hiển thị lịch sử đã gom nhóm
+                        for g in reversed(groups): # Hiện mới nhất lên đầu
+                            start_g = g[0]['ngay_nghi'].strftime('%d/%m/%Y')
+                            end_g = g[-1]['ngay_nghi'].strftime('%d/%m/%Y')
+                            total_days = len(g)
+                            status = g[0]['trang_thai']
+                            buoi = g[0]['buoi_nghi']
+                            
+                            # Chọn màu sắc cho trạng thái
+                            color = "#ffa500" if status == "Chờ duyệt" else "#28a745"
+                            if status == "Bị từ chối": color = "#dc3545"
+
+                            with st.container(border=True):
+                                col1, col2 = st.columns([3, 1])
+                                with col1:
+                                    if total_days > 1:
+                                        st.markdown(f"📅 **{start_g} - {end_g}** ({total_days} ngày)")
+                                    else:
+                                        st.markdown(f"📅 **{start_g}**")
+                                    st.caption(f"Buổi: {buoi} | Lý do: {g[0]['ly_do']}")
+                                with col2:
+                                    st.markdown(f"<span style='color:{color}; font-weight:bold;'>{status}</span>", unsafe_allow_html=True)
+                    else:
+                        st.info("Bạn chưa có lịch sử đăng ký nào.")
+
+        # 3. KHU VỰC SYSTEM ADMIN – PHÊ DUYỆT + LỊCH SỬ
+        if role == "System Admin":
+            with st.expander("🛠️ Phê duyệt & Quản lý đơn nghỉ", expanded=True):
+                # --- TRONG KHU VỰC 3: PHÊ DUYỆT & QUẢN LÝ ---
+                res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
+
+                if res.data:
+                    df_raw = pd.DataFrame(res.data)
+                    df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
+                    
+                    # --- LOGIC GOM NHÓM ĐƠN ĐỂ HIỂN THỊ ---
+                    grouped_data = []
+                    if not df_raw.empty:
+                        # Nhóm theo User, Lý do và Buổi nghỉ trước
+                        for (uname, name, reason, session, role_name), group in df_raw.groupby(['username', 'ho_ten', 'ly_do', 'buoi_nghi', 'nhom']):
+                            group = group.sort_values('ngay_nghi')
+                            
+                            # Kiểm tra tính liên tiếp của ngày
+                            start_date = None
+                            prev_date = None
+                            ids_in_group = []
+
+                            for index, row in group.iterrows():
+                                curr_date = row['ngay_nghi']
+                                
+                                if start_date is None:
+                                    start_date = curr_date
+                                    ids_in_group = [row['id']]
+                                elif (curr_date - prev_date).days == 1:
+                                    ids_in_group.append(row['id'])
+                                else:
+                                    # Kết thúc một đợt, lưu lại và bắt đầu đợt mới
+                                    grouped_data.append({
+                                        "username": uname,
+                                        "Họ và Tên": name,
+                                        "Chức danh": role_name,
+                                        "Từ ngày": start_date.strftime('%d/%m/%Y'),
+                                        "Đến ngày": prev_date.strftime('%d/%m/%Y'),
+                                        "Tổng ngày": len(ids_in_group),
+                                        "Buổi nghỉ": session,
+                                        "Lý do đăng ký": reason,
+                                        "ids": ids_in_group # Lưu lại danh sách ID để xử lý hàng loạt
+                                    })
+                                    start_date = curr_date
+                                    ids_in_group = [row['id']]
+                                prev_date = curr_date
+                            
+                            # Thêm đợt cuối cùng
+                            grouped_data.append({
+                                "username": uname,
+                                "Họ và Tên": name,
+                                "Chức danh": role_name,
+                                "Từ ngày": start_date.strftime('%d/%m/%Y'),
+                                "Đến ngày": prev_date.strftime('%d/%m/%Y'),
+                                "Tổng ngày": len(ids_in_group),
+                                "Buổi nghỉ": session,
+                                "Lý do đăng ký": reason,
+                                "ids": ids_in_group
+                            })
+
+                    df_display = pd.DataFrame(grouped_data)
+
+                    st.write("📌 *Chọn các đợt nghỉ cần xử lý:*")
+                    event = st.dataframe(
+                        df_display.drop(columns=['ids']), # Ẩn cột IDs bí mật
+                        use_container_width=True,
+                        hide_index=True,
+                        on_select="rerun",
+                        selection_mode="multi-row" # Đảm bảo dùng dấu gạch nối
+                    )
+
+                    selected_indices = event.selection.rows
+                    
+                    if selected_indices:
+                        st.divider()
+                        col_form, col_history = st.columns([2, 3])
+                        
+                        # Lấy toàn bộ danh sách ID thực tế từ các hàng được chọn
+                        all_selected_ids = []
+                        for idx in selected_indices:
+                            all_selected_ids.extend(df_display.iloc[idx]['ids'])
+                            
+                        first_selection = df_display.iloc[selected_indices[0]]
+
+                        # --- PHÍA BÊN TRÁI: FORM XỬ LÝ CHIỀU DỌC ---
+                        with col_form:
+                            st.markdown(f"#### 📝 Xử lý đơn cho: **{first_selection['Họ và Tên']}**")
+                            reason_reject = st.text_area("Lý do từ chối (nếu có):", key="admin_reject_reason")
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("✅ Xác nhận duyệt", type="primary", use_container_width=True):
+                                    # Xử lý update cho tất cả ID đã gom nhóm
+                                    supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
+                                    st.success("Đã duyệt thành công!")
+                                    st.rerun()
+
+                            with c2:
+                                if st.button("❌ Từ chối đơn", use_container_width=True):
+                                    if not reason_reject:
+                                        st.error("⚠️ Vui lòng nhập lý do!")
+                                    else:
+                                        supabase.table("dang_ky_nghi").update({
+                                            "trang_thai": "Bị từ chối",
+                                            "ly_do_tu_choi": reason_reject
+                                        }).in_("id", all_selected_ids).execute()
+                                        st.warning("Đã từ chối đơn.")
+                                        st.rerun()
+
+                        # --- PHÍA BÊN PHẢI: XEM LỊCH SỬ NHÂN VIÊN ĐƯỢC CHỌN ---
+                        with col_history:
+                            st.markdown(f"#### 🕒 Lịch sử tóm tắt: **{first_selection['Họ và Tên']}**")
+                            
+                            # Truy vấn dữ liệu lịch sử của nhân viên
+                            history_res = supabase.table("dang_ky_nghi")\
+                                .select("ngay_nghi, trang_thai, ly_do_tu_choi, buoi_nghi, ly_do")\
+                                .eq("username", first_selection['username'])\
+                                .order("ngay_nghi", desc=False).execute() # Sắp xếp tăng dần để gom nhóm
+                            
+                            if history_res.data:
+                                h_df = pd.DataFrame(history_res.data)
+                                h_df['ngay_nghi'] = pd.to_datetime(h_df['ngay_nghi'])
+                                
+                                # --- LOGIC GOM NHÓM NGÀY LIÊN TIẾP ---
+                                groups = []
+                                if not h_df.empty:
+                                    current_group = [h_df.iloc[0]]
+                                    for i in range(1, len(h_df)):
+                                        prev = h_df.iloc[i-1]
+                                        curr = h_df.iloc[i]
+                                        
+                                        # Điều kiện gom nhóm: Ngày liên tiếp + Cùng trạng thái + Cùng buổi + Cùng lý do
+                                        diff = (curr['ngay_nghi'] - prev['ngay_nghi']).days
+                                        if diff == 1 and curr['trang_thai'] == prev['trang_thai'] and \
+                                        curr['buoi_nghi'] == prev['buoi_nghi'] and curr['ly_do'] == prev['ly_do']:
+                                            current_group.append(curr)
+                                        else:
+                                            groups.append(current_group)
+                                            current_group = [curr]
+                                    groups.append(current_group)
+
+                                # Hiển thị kết quả (Đảo ngược danh sách để đơn mới nhất lên đầu)
+                                for group in reversed(groups):
+                                    start_d = group[0]['ngay_nghi'].strftime('%d/%m/%Y')
+                                    end_d = group[-1]['ngay_nghi'].strftime('%d/%m/%Y')
+                                    count = len(group)
+                                    status = group[0]['trang_thai']
+                                    buoi = group[0]['buoi_nghi']
+                                    ly_do = group[0]['ly_do']
+                                    phan_hoi = group[0].get('ly_do_tu_choi') or "---"
+
+                                    # Xác định màu sắc trạng thái
+                                    status_color = "#ffa500" if status == "Chờ duyệt" else "#28a745"
+                                    if status == "Bị từ chối": status_color = "#dc3545"
+
+                                    # Hiển thị từng đợt nghỉ trong một Container gọn gàng
+                                    with st.container(border=True):
+                                        c1, c2 = st.columns([3, 1])
+                                        with c1:
+                                            if count > 1:
+                                                st.markdown(f"📅 **{start_d} - {end_d}**")
+                                                st.caption(f"Tổng cộng: **{count} ngày** ({buoi})")
+                                            else:
+                                                st.markdown(f"📅 **{start_d}** ({buoi})")
+                                            st.markdown(f"**Lý do:** {ly_do}")
+                                            if status == "Bị từ chối":
+                                                st.caption(f"💬 Phản hồi: {phan_hoi}")
+                                        with c2:
+                                            st.markdown(f"<div style='text-align:right; color:{status_color}; font-weight:bold; padding-top:10px;'>{status}</div>", unsafe_allow_html=True)
+                            else:
+                                st.info("Nhân viên này chưa có lịch sử đăng ký.")
+                else:
+                    st.info("Hiện tại không có đơn nào cần xử lý.") 
+    # =========================================================
+    # TAB 4 – BÁO CÁO (ADMIN + SYSTEM ADMIN)
+    # =========================================================
+    if role in ROLE_ADMIN + ROLE_SYS:
         with tabs[2]:
+
             st.markdown("#### 📊 Báo cáo chấm công nhân viên")
             col_f1, col_f2 = st.columns(2)
-            
+                        
             # 1. Lấy danh sách nhân viên từ Supabase thay vì SQLite
             try:
                 responser_users = supabase.table("quan_tri_vien") \
@@ -758,6 +1236,7 @@ if menu == "🕒 Chấm công đi làm":
                     )
                 else: 
                     st.info(f"ℹ️ Không có dữ liệu chấm công của **{target_user_rpt}** trong tháng {sel_m}/{sel_y}")
+
 elif menu == "📦 Giao hàng - Lắp đặt":
     # Lấy thông tin từ session_state (đã nạp từ Cookie)
     role = st.session_state.get("role", "User")
@@ -1231,8 +1710,46 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 df_page = df_final.iloc[start_idx:end_idx]
 
                                 # Hiển thị bảng (Chỉ 10 dòng)
-                                st.dataframe(df_page, use_container_width=True, hide_index=True)
+                                #st.dataframe(df_page, use_container_width=True, hide_index=True)
+                                # --- CHỈ SYSTEM ADMIN MỚI THẤY CỘT CHỌN XÓA ---
+                                is_admin = st.session_state.get("role") == "System Admin"
 
+                                if is_admin:
+                                    # Thêm cột checkbox vào đầu bảng (mặc định là False)
+                                    df_page.insert(0, "🗑️", False)
+                                    
+                                    # Sử dụng data_editor để có thể tích chọn
+                                    edited_df = st.data_editor(
+                                        df_page,
+                                        use_container_width=True,
+                                        hide_index=True,
+                                        disabled=[c for c in df_page.columns if c != "🗑️"], # Chỉ cho phép sửa cột checkbox
+                                        key="editor_delete_table"
+                                    )
+
+                                    # Lọc ra các dòng được tích chọn xóa
+                                    rows_to_delete = edited_df[edited_df["🗑️"] == True]
+                                    
+                                    if not rows_to_delete.empty:
+                                        st.warning(f"⚠️ Đang chọn {len(rows_to_delete)} đơn để xóa.")
+                                        if st.button("🔥 XÁC NHẬN XÓA VĨNH VIỄN", type="primary", use_container_width=True):
+                                            try:
+                                                # Chú ý: Nếu bảng hiển thị đã đổi tên cột thành "Số HĐ", 
+                                                # bạn phải dùng rows_to_delete["Số HĐ"]
+                                                list_so_hd = rows_to_delete["Số HĐ"].tolist() 
+                                                
+                                                for hd_id in list_so_hd:
+                                                    # Sửa 'value' thành 'hd_id' để khớp với biến vòng lặp
+                                                    response = supabase.table("cham_cong").delete().eq("so_hoa_don", hd_id).execute()                                                
+                                                
+                                                st.success("✅ Đã xóa các đơn được chọn thành công!")
+                                                time.sleep(1)
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Lỗi khi xóa: {e}")
+                                else:
+                                    # Nếu không phải admin, hiển thị bảng xem thông thường
+                                    st.dataframe(df_page, use_container_width=True, hide_index=True)
                                 # --- BỘ CHUYỂN TRANG ---
                             
                                 if total_pages > 1:
@@ -1272,8 +1789,6 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         if st.button("Sau ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages)):
                                             st.session_state.current_page += 1
                                             st.rerun()
-
-                                # --- NÚT XUẤT EXCEL (Giữ nguyên logic cũ của bạn ở phần dưới c_exp) ---
 
                                 # --- XỬ LÝ XUẤT FILE EXCEL ---
                                 out = io.BytesIO()
@@ -1647,7 +2162,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     .execute()
                                 
                                 st.success("✅ Đã chuyển đơn về trạng thái Chờ duyệt thành công!")
-                                time.sleep(1)
+                                time.sleep(0.5)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Lỗi khi cập nhật Cloud: {e}")

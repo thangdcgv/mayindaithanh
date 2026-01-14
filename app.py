@@ -809,35 +809,16 @@ if menu == "🕒 Chấm công đi làm":
                         if (num_new_days > 2) or (days_used + num_new_days > 2) or (start_datetime < datetime.now() + timedelta(hours=24)):
                             is_special_auto = True
 
-<<<<<<< HEAD
-                        if submit:
-                            # 3. Xử lý logic gộp lý do chi tiết
-                            base_reason = reason_main
-                            if reason_main == "Khác":
-                                if not other_reason.strip():
-                                    st.error("⚠️ Bạn đã chọn 'Khác', vui lòng nhập lý do chi tiết ở ô phía trên!")
-                                    st.stop()
-                            base_reason = other_reason.strip()
-                            
-                            # Gán nhãn đặc biệt nếu được tích chọn
-                            if special_request:
-                                final_reason = f"[ĐẶC BIỆT] {base_reason}"
-                            else: base_reason
-
-                            if not isinstance(range_date, tuple) or len(range_date) != 2:
-                                st.error("Vui lòng chọn đủ ngày bắt đầu và kết thúc!")
-=======
                     # --- PHẦN 3: FORM ĐĂNG KÝ ---
                     if not range_date or len(range_date) < 2:
                         st.info("👆 Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc để tiếp tục.")
                     else:
                         with st.form("form_dang_ky_nghi_vertical", clear_on_submit=False):
                             if is_special_auto:
-                                st.warning(f"⚠️ Hệ thống nhận diện: Nghỉ đặc biệt (Nghỉ: {num_new_days} ngày,tổng theo tháng dự kiến : {days_used + num_new_days}).")
+                                st.warning(f"⚠️ Hệ thống nhận diện: Nghỉ đặc biệt (Tổng: {days_used + num_new_days} ngày hoặc nghỉ gấp).")
                                 special_request = st.checkbox("🆘 Xác nhận nghỉ đặc biệt/đột xuất", value=True, disabled=True)
                                 reason_main = st.selectbox("Lý do nghỉ", ["Khác"], index=0, disabled=True)
                                 other_reason = st.text_area("👉 Nhập lý do chi tiết (Bắt buộc):", placeholder="Giải trình lý do tại đây...")
->>>>>>> c50e2e7 (Lịch nghỉ)
                             else:
                                 special_request = False
                                 reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])

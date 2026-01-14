@@ -789,28 +789,27 @@ if menu == "🕒 Chấm công đi làm":
 
                 with col_left:
                     st.markdown("#### 📝 Tạo đơn mới")
-                    
-                    # 1. Đưa Selectbox ra ngoài form để giao diện phản ứng tức thì khi chọn "Khác"
-                    reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])
-                    
-                    # 2. Chỉ hiện ô nhập văn bản khi chọn "Khác"
-                    other_reason = ""
-                    if reason_main == "Khác":
-                        other_reason = st.text_input("👉 Vui lòng ghi rõ lý do:", placeholder="Nhập lý do của bạn tại đây...")
 
-                    if "pending_nghi" not in st.session_state:
-                        st.session_state.pending_nghi = None
+                    # --- PHẦN 1: TRUY VẤN DỮ LIỆU CŨ (Để tính toán logic bên dưới) ---
+                    res_limit = supabase.table("dang_ky_nghi").select("ngay_nghi").eq("username", st.session_state.username).neq("trang_thai", "Bị từ chối").execute()
+                    days_used = len(res_limit.data) if res_limit.data else 0
 
-                    with st.form("form_dang_ky_nghi_vertical", clear_on_submit=True):
-                        # Mặc định gợi ý quy tắc nghỉ trước 24h
-                        range_date = st.date_input("Khoảng thời gian nghỉ", 
-                                                value=(date.today() + timedelta(days=1), date.today() + timedelta(days=1)), 
-                                                format="DD/MM/YYYY")
-                        session_off = st.selectbox("Buổi nghỉ", ["Cả ngày", "Sáng", "Chiều"])
-                        special_request = st.checkbox("Gửi thông báo đặc biệt (Nghỉ quá 2 ngày/tháng hoặc lý do khẩn cấp)")
+                    # --- PHẦN 2: CHỌN THỜI GIAN (Ngoài form để phản ứng tức thì) ---
+                    range_date = st.date_input("Chọn khoảng thời gian nghỉ", value=(), format="DD/MM/YYYY")
+
+                    is_special_auto = False
+                    num_new_days = 0
+
+                    if isinstance(range_date, tuple) and len(range_date) == 2:
+                        start_date, end_date = range_date
+                        num_new_days = (end_date - start_date).days + 1
+                        start_datetime = datetime.combine(start_date, datetime.min.time())
                         
-                        submit = st.form_submit_button("GỬI ĐƠN", use_container_width=True, type="primary")
+                        # Logic nhận diện đơn đặc biệt
+                        if (num_new_days > 2) or (days_used + num_new_days > 2) or (start_datetime < datetime.now() + timedelta(hours=24)):
+                            is_special_auto = True
 
+<<<<<<< HEAD
                         if submit:
                             # 3. Xử lý logic gộp lý do chi tiết
                             base_reason = reason_main
@@ -827,100 +826,101 @@ if menu == "🕒 Chấm công đi làm":
 
                             if not isinstance(range_date, tuple) or len(range_date) != 2:
                                 st.error("Vui lòng chọn đủ ngày bắt đầu và kết thúc!")
+=======
+                    # --- PHẦN 3: FORM ĐĂNG KÝ ---
+                    if not range_date or len(range_date) < 2:
+                        st.info("👆 Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc để tiếp tục.")
+                    else:
+                        with st.form("form_dang_ky_nghi_vertical", clear_on_submit=False):
+                            if is_special_auto:
+                                st.warning(f"⚠️ Hệ thống nhận diện: Nghỉ đặc biệt (Nghỉ: {num_new_days} ngày,tổng theo tháng dự kiến : {days_used + num_new_days}).")
+                                special_request = st.checkbox("🆘 Xác nhận nghỉ đặc biệt/đột xuất", value=True, disabled=True)
+                                reason_main = st.selectbox("Lý do nghỉ", ["Khác"], index=0, disabled=True)
+                                other_reason = st.text_area("👉 Nhập lý do chi tiết (Bắt buộc):", placeholder="Giải trình lý do tại đây...")
+>>>>>>> c50e2e7 (Lịch nghỉ)
                             else:
-                                start_date, end_date = range_date
-                                now = datetime.now()
+                                special_request = False
+                                reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])
+                                other_reason = st.text_input("Ghi rõ lý do:") if reason_main == "Khác" else ""
+
+                            session_off = st.selectbox("Buổi nghỉ", ["Cả ngày", "Sáng", "Chiều"])
+                            submit = st.form_submit_button("GỬI ĐƠN", use_container_width=True, type="primary")
+
+                            # --- TẤT CẢ LOGIC KIỂM TRA PHẢI NẰM TRONG IF SUBMIT ---
+                            if submit:
+                                # 1. Khởi tạo & Kiểm tra lý do
+                                if is_special_auto and not other_reason.strip():
+                                    st.error("❌ Bạn bắt buộc phải giải trình lý do chi tiết!")
+                                    st.stop()
                                 
-                                # Kiểm tra đăng ký trước 24h (00:00 ngày nghỉ so với hiện tại)
-                                start_datetime = datetime.combine(start_date, dt_module.time.min)
-                                if start_datetime < now + timedelta(hours=24):
-                                    st.error("❌ Bạn phải đăng ký nghỉ tối thiểu trước 24h!")
-                                else:
-                                    try:
-                                        # 4. Truy vấn loại trừ các đơn "Bị từ chối" để cho phép đăng ký lại
-                                        res_check = supabase.table("dang_ky_nghi").select("*")\
-                                            .neq("trang_thai", "Bị từ chối")\
-                                            .execute()
-                                        df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
+                                final_reason = f"[ĐẶC BIỆT] {other_reason.strip()}" if is_special_auto else (other_reason.strip() if reason_main == "Khác" else reason_main)
 
-                                        # Kiểm tra giới hạn 2 ngày/tháng
-                                        month_now, year_now = start_date.month, start_date.year
-                                        user_days_this_month = 0
+                                # 2. Kiểm tra quy tắc 24h (Chỉ chặn nếu không phải đơn đặc biệt)
+                                start_datetime = datetime.combine(range_date[0], datetime.min.time())
+                                if not is_special_auto and start_datetime < datetime.now() + timedelta(hours=24):
+                                    st.error("❌ Bạn phải đăng ký trước 24h! Nếu khẩn cấp, hãy kiểm tra lại khoảng ngày để hệ thống mở chế độ Đột xuất.")
+                                    st.stop()
+
+                                try:
+                                    # 3. Truy vấn dữ liệu trùng lịch
+                                    res_check = supabase.table("dang_ky_nghi").select("*").neq("trang_thai", "Bị từ chối").execute()
+                                    df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
+
+                                    data_to_insert, data_to_update = [], []
+                                    error_overlap_colleague, own_overlap_days = [], []
+
+                                    for i in range(num_new_days):
+                                        curr_day = start_date + timedelta(days=i)
+                                        curr_day_str = curr_day.isoformat()
+                                        current_day_reason = final_reason
+
                                         if not df_check.empty:
-                                            user_month_data = df_check[
-                                                (df_check['username'] == st.session_state.username) & 
-                                                (pd.to_datetime(df_check['ngay_nghi']).dt.month == month_now) &
-                                                (pd.to_datetime(df_check['ngay_nghi']).dt.year == year_now)
-                                            ]
-                                            user_days_this_month = len(user_month_data)
+                                            # Kiểm tra trùng chính mình
+                                            own = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['username'] == st.session_state.username)]
+                                            if not own.empty:
+                                                own_overlap_days.append(curr_day.strftime('%d/%m/%Y'))
+                                                data_to_update.append({"id": own.iloc[0]['id'], "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"})
+                                                continue 
 
-                                        data_to_insert, data_to_update = [], []
-                                        error_overlap_colleague, own_overlap_days = [], []
-                                        error_sunday = []
-                                        
-                                        num_new_days = (end_date - start_date).days + 1
+                                            # Kiểm tra trùng đồng nghiệp
+                                            colleague = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['nhom'] == st.session_state.chuc_danh) & (df_check['username'] != st.session_state.username)]
+                                            if not colleague.empty:
+                                                names = ", ".join(colleague['ho_ten'].tolist())
+                                                error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} (trùng: {names})")
+                                                if is_special_auto:
+                                                    current_day_reason += f" [⚠️ TRÙNG LỊCH: {names}]"
 
-                                        for i in range(num_new_days):
-                                            curr_day = start_date + timedelta(days=i)
-                                            curr_day_str = curr_day.isoformat()
+                                        data_to_insert.append({
+                                            "username": st.session_state.username, "ho_ten": st.session_state.ho_ten, 
+                                            "nhom": st.session_state.chuc_danh, "ngay_nghi": curr_day_str, 
+                                            "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"
+                                        })
 
-                                            if not df_check.empty:
-                                                # Kiểm tra trùng chính mình (chỉ tính đơn chưa bị từ chối)
-                                                own = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['username'] == st.session_state.username)]
-                                                if not own.empty:
-                                                    own_overlap_days.append(curr_day.strftime('%d/%m/%Y'))
-                                                    data_to_update.append({
-                                                        "id": own.iloc[0]['id'], 
-                                                        "buoi_nghi": session_off, 
-                                                        "ly_do": final_reason, # Dùng lý do mới
-                                                        "trang_thai": "Chờ duyệt"
-                                                    })
-                                                    continue 
+                                    # --- XỬ LÝ LƯU DỮ LIỆU ---
+                                    if error_overlap_colleague and not is_special_auto:
+                                        st.error(f"❌ Trùng lịch nhóm: {', '.join(error_overlap_colleague)}")
+                                    elif own_overlap_days:
+                                        st.session_state.pending_nghi = {"days": own_overlap_days, "to_update": data_to_update, "to_insert": data_to_insert}
+                                    else:
+                                        if data_to_insert:
+                                            supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
+                                            if error_overlap_colleague: # Thông báo thêm nếu có trùng mà vẫn cho phép
+                                                st.warning(f"⚠️ Đơn đã gửi kèm cảnh báo trùng lịch: {', '.join(error_overlap_colleague)}")
+                                            st.success("✅ Gửi đơn thành công!")
+                                            time.sleep(1)
+                                            st.rerun()
 
-                                                # Kiểm tra trùng đồng nghiệp
-                                                colleague = df_check[(df_check['ngay_nghi'] == curr_day_str) & 
-                                                                    (df_check['nhom'] == st.session_state.chuc_danh) & 
-                                                                    (df_check['username'] != st.session_state.username)]
-                                                if not colleague.empty:
-                                                    error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} ({', '.join(colleague['ho_ten'].tolist())})")
+                                except Exception as e:
+                                    st.error(f"Lỗi hệ thống: {e}")
 
-                                            data_to_insert.append({
-                                                "username": st.session_state.username, 
-                                                "ho_ten": st.session_state.ho_ten, 
-                                                "nhom": st.session_state.chuc_danh, 
-                                                "ngay_nghi": curr_day_str, 
-                                                "buoi_nghi": session_off, 
-                                                "ly_do": final_reason, 
-                                                "trang_thai": "Chờ duyệt"
-                                            })
-
-                                        # Hiển thị lỗi theo thứ tự ưu tiên
-                                        
-                                        if (user_days_this_month + num_new_days) > 2 and not special_request:
-                                            st.error(f"❌ Bạn đã nghỉ {user_days_this_month} ngày. Hãy tích chọn 'Thông báo đặc biệt' để đăng ký thêm.")
-                                        elif error_overlap_colleague:
-                                            st.error(f"❌ Trùng lịch nhóm {st.session_state.chuc_danh}: {', '.join(error_overlap_colleague)}")
-                                        elif own_overlap_days:
-                                            st.session_state.pending_nghi = {"days": own_overlap_days, "to_update": data_to_update, "to_insert": data_to_insert}
-                                        else:
-                                            if data_to_insert:
-                                                supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
-                                                st.success("✅ Gửi đơn thành công!")
-                                                time.sleep(1)
-                                                st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Lỗi: {e}")
-
-                    # XỬ LÝ CẬP NHẬT TRÙNG LỊCH
-                    if st.session_state.pending_nghi:
+                    # --- PHẦN 4: XỬ LÝ CẬP NHẬT TRÙNG LỊCH CHÍNH MÌNH (Ngoài form) ---
+                    if st.session_state.get('pending_nghi'):
                         pending = st.session_state.pending_nghi
-                        st.warning(f"🔔 Bạn đã có lịch nghỉ vào ngày: {', '.join(pending['days'])}. Cập nhật lại?")
+                        st.warning(f"🔔 Bạn đã có lịch vào ngày: {', '.join(pending['days'])}. Cập nhật lại?")
                         c_u1, c_u2 = st.columns(2)
-                        if c_u1.button("🔄 Cập nhật", use_container_width=True, type="primary"):
+                        if c_u1.button("🔄 Cập nhật", type="primary", use_container_width=True):
                             for item in pending['to_update']:
                                 id_up = item.pop('id')
-                                # Thêm prefix đặc biệt nếu có tích chọn
-                                if special_request: item['ly_do'] = f"[ĐẶC BIỆT] {item['ly_do']}"
                                 supabase.table("dang_ky_nghi").update(item).eq("id", id_up).execute()
                             if pending['to_insert']:
                                 supabase.table("dang_ky_nghi").insert(pending['to_insert']).execute()
@@ -1650,10 +1650,91 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             if df_display.empty:
                                 st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
                             else:
-                                # --- HIỂN THỊ METRIC TỔNG THU NHẬP ---
-                                c_met, c_exp = st.columns([2, 1])
-                                rev_sum = df_display[df_display["Trạng thái"] == "Đã duyệt"]["Thành tiền"].sum()
-                                c_met.metric("💰 Tổng thu nhập đã duyệt", f"{rev_sum:,.0f} VNĐ")
+                                # Tính toán dữ liệu
+                                total_count = len(df_display)
+                                approved_df = df_display[df_display["Trạng thái"] == "Đã duyệt"]
+                                approved_count = len(approved_df)
+                                rev_sum = approved_df["Thành tiền"].sum()
+
+                                # CSS để làm đẹp các thẻ chỉ số
+                                st.markdown("""
+                                    <style>
+                                    .stats-container {
+                                        display: flex;
+                                        align-items: flex-end; /* Căn lề dưới để bằng với nút bấm */
+                                        gap: 40px;
+                                        padding: 10px 5px;
+                                        margin-bottom: -10px; /* Thu hẹp khoảng cách với bảng */
+                                        font-family: inherit;
+                                    }
+                                    
+                                    .stat-item {
+                                        display: flex;
+                                        flex-direction: column;
+                                        font-family: inherit;
+                                    }
+
+                                    .stat-label {
+                                        color: #94a3b8; /* Màu chữ phụ xám xanh */
+                                        font-size: 0.8rem;
+                                        font-weight: 600;
+                                        text-transform: uppercase;
+                                        letter-spacing: 0.1em;
+                                        margin-bottom: 2px;
+                                        font-family: inherit;
+                                    }
+
+                                    .stat-value {
+                                        color: #ffffff;
+                                        font-size: 2rem;
+                                        font-weight: 800;
+                                        line-height: 1;
+                                        text-shadow: 0px 2px 4px rgba(0,0,0,0.3); /* Tạo độ nổi trên nền tối */
+                                        font-family: inherit;
+                                    }
+
+                                    .currency {
+                                        font-size: 0.9rem;
+                                        color: #38bdf8; /* Màu xanh Cyan làm điểm nhấn cho tiền tệ */
+                                        margin-left: 4px;
+                                        font-family: inherit;
+                                    }
+
+                                    .count-highlight {
+                                        color: #4ade80; /* Màu xanh lá dịu cho số lượng đơn đã duyệt */
+                                        font-family: inherit;
+                                    }
+
+                                    .count-total {
+                                        color: #64748b;
+                                        font-size: 1.1rem;
+                                        font-weight: 400;
+                                        font-family: inherit;
+                                    }
+                                    </style>
+                                """, unsafe_allow_html=True)
+
+                                # Chia cột: Thu nhập | Thống kê | Nút xuất Excel (đẩy về bên phải)
+                                col_info, c_exp = st.columns([4, 1.2])
+
+                                with col_info:
+                                    # Hiển thị các chỉ số trần (không khung)
+                                    st.markdown(f"""
+                                        <div class="stats-container">
+                                            <div class="stat-item">
+                                                <div class="stat-label">💰 Tổng thu nhập</div>
+                                                <div class="stat-value">
+                                                    {rev_sum:,.0f}<span class="currency">VNĐ</span>
+                                                </div>
+                                            </div>
+                                            <div class="stat-item">
+                                                <div class="stat-label">📊 Thống kê đơn</div>
+                                                <div class="stat-value">
+                                                    <span class="count-highlight">{approved_count}</span><span class="count-total"> / {total_count} đơn</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    """, unsafe_allow_html=True)
                                 
                                 # --- XỬ LÝ GIAO DIỆN BẢNG HIỂN THỊ (df_view) ---
                                 df_view = df_display.copy()
@@ -1905,13 +1986,16 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
 
                                 # NÚT TẢI EXCEL
-                                c_exp.download_button(
-                                    label="📥 Tải Excel Báo Cáo", 
-                                    data=out.getvalue(), 
-                                    file_name=f"Bao_Cao_Lap_Dat_{current_user}_{date.today()}.xlsx", 
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    use_container_width=True
-                                )
+                                with c_exp:
+                                    # Căn chỉnh nút Export cho cân đối với chiều cao của các thẻ Metric
+                                    st.write("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)                                  # Code xuất Excel của bạn giữ nguyên
+                                    st.download_button(
+                                        label="📥 Tải Excel Báo Cáo", 
+                                        data=out.getvalue(), 
+                                        file_name=f"Bao_Cao_{current_user}.xlsx", 
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True
+                                    )
             else:
                 st.info("📭 Chưa có dữ liệu đơn nào trong hệ thống.")
         except Exception as e:

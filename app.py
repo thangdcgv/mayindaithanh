@@ -805,7 +805,7 @@ if menu == "🕒 Chấm công đi làm":
         st.divider()
 
         # 2. KHU VỰC USER – ĐĂNG KÝ + LỊCH SỬ
-        if chuc_danh != "Admin":
+        if role != "System Admin":
             with st.expander("✨ Đăng ký & Theo dõi lịch nghỉ", expanded=True):
                 col_left, col_right = st.columns([2, 3])
 
@@ -1083,19 +1083,37 @@ if menu == "🕒 Chấm công đi làm":
                                 all_selected_ids.extend(df_display.iloc[idx]['ids'])
 
                             st.markdown(f"#### 📝 Xử lý đơn: **{first_selection['Họ và Tên']}**")
-                            reason_reject = st.text_area("Lý do từ chối (nếu có):", key="reject_area_admin")
+                            
+                            # Admin chỉ cần nhập vào đây khi muốn Từ chối
+                            reason_reject = st.text_area("Lý do từ chối (Bắt buộc nếu từ chối):", 
+                                                        placeholder="Nhập lý do để thay thế lý do đăng ký của nhân viên...",
+                                                        key="reject_area_admin")
                             
                             c1, c2 = st.columns(2)
+                            
+                            # --- NÚT DUYỆT ---
                             if c1.button("✅ Duyệt", type="primary", use_container_width=True):
-                                supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
+                                # Khi duyệt, chỉ cập nhật trạng thái, không quan tâm đến ô lý do
+                                supabase.table("dang_ky_nghi").update({
+                                    "trang_thai": "Đã duyệt"
+                                }).in_("id", all_selected_ids).execute()
+                                
                                 st.session_state.toast_message = f"Đã duyệt thành công cho {first_selection['Họ và Tên']}!"
                                 st.rerun()
+
+                            # --- NÚT TỪ CHỐI ---
                             if c2.button("❌ Từ chối", use_container_width=True):
-                                if not reason_reject:
-                                    st.error("⚠️ Vui lòng nhập lý do từ chối!")
+                                if not reason_reject.strip():
+                                    st.error("⚠️ Vui lòng nhập lý do từ chối để cập nhật vào đơn!")
                                 else:
-                                    supabase.table("dang_ky_nghi").update({"trang_thai": "Bị từ chối", "ly_do_tu_choi": reason_reject}).in_("id", all_selected_ids).execute()
-                                    st.session_state.toast_message = "Đã từ chối đơn."
+                                    # Cập nhật trạng thái VÀ ghi đè lý do từ chối vào cột 'ly_do'
+                                    # (Bạn có thể cập nhật thêm cột 'ly_do_tu_choi' nếu muốn lưu song song)
+                                    supabase.table("dang_ky_nghi").update({
+                                        "trang_thai": "Bị từ chối", 
+                                        "ly_do": f"❌ TỪ CHỐI: {reason_reject.strip()}" # Ghi đè lý do admin vào đây
+                                    }).in_("id", all_selected_ids).execute()
+                                    
+                                    st.session_state.toast_message = "Đã từ chối đơn và cập nhật lý do."
                                     st.rerun()
                         else:
                             st.info("💡 Chọn một hoặc nhiều đơn phía trên để bắt đầu phê duyệt.")

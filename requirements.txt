@@ -6,4 +6,5 @@ supabase
 st-supabase-connection
 extra-streamlit-components
 streamlit-cookies-manager
+streamlit-local-storage
 cryptography

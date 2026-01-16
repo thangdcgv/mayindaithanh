@@ -43,24 +43,27 @@ def register_user(username, password):
         "password": hash_password(password)
     }).execute()
 
-# hàm logo
-def get_base64_of_bin_file(bin_file):
-    with open(bin_file, 'rb') as f:
-        data = f.read()
-    return base64.b64encode(data).decode()
+@st.cache_data
+def load_logo_base64(bin_file="LOGO.png"):
+    try:
+        with open(bin_file, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except Exception:
+        return None
 
-def display_logo(logo_path):
-    if os.path.exists(logo_path):
-        binary_data = get_base64_of_bin_file(logo_path)
+def display_logo(logo_path="LOGO.png"):
+    # Gọi hàm đã cache ở trên
+    b64 = load_logo_base64(logo_path)
+    if b64:
         st.markdown(
             f"""
             <div style="text-align: center;">
-                <img src="data:image/png;base64,{binary_data}" width="150">
+                <img src="data:image/png;base64,{b64}" width="150">
             </div>
             """,
             unsafe_allow_html=True
         )
-
 
 #========================
 #SECTION 3. COOKIE MANAGER & AUTH CONSTANT
@@ -306,7 +309,10 @@ if "list_chuc_danh" not in st.session_state:
         "Hệ thống", "Kế toán", "KTV Lắp đặt", 
         "Quản lý", "Giao nhận", "Kinh doanh", "Nhân viên"
     ]
-
+# Kiểm tra nếu có thông báo đang chờ thì hiển thị nó
+if "toast_message" in st.session_state:
+    st.toast(st.session_state.toast_message)
+    del st.session_state.toast_message # Xóa đi để không hiện lại khi rerun lần sau
 #========================
 #SECTION 10. HÀM HỆ THỐNG & IMAGE
 #========================
@@ -335,7 +341,14 @@ def process_image_to_blob(uploaded_file):
             st.error(f"❌ Lỗi xử lý ảnh: {e}")
             return None
     return None
-
+@st.cache_data(ttl=600) # Cache trong 10 phút
+def get_monthly_leave_schedule():
+    # Chỉ lấy các cột cần thiết thay vì select("*")
+    res_nghi = supabase.table("dang_ky_nghi").select("ho_ten, ngay_nghi, buoi_nghi, trang_thai")\
+        .neq("trang_thai", "Bị từ chối").execute()
+    if res_nghi.data:
+        return pd.DataFrame(res_nghi.data)
+    return pd.DataFrame()
 #========================
 #SECTION 11. BÁO CÁO CHẤM CÔNG
 #========================
@@ -522,8 +535,7 @@ if menu == "🕒 Chấm công đi làm":
                                 "nguoi_thao_tac": user
                             }
                             supabase.table("cham_cong_di_lam").insert(data_in).execute()
-                            st.toast("✅ Đã ghi nhận giờ vào")
-                            time.sleep(1)
+                            st.session_state.toast_message = "✅ Đã ghi nhận giờ vào"
                             st.rerun()
                         except Exception as e:
                             st.error(f"Lỗi: {e}")
@@ -539,8 +551,7 @@ if menu == "🕒 Chấm công đi làm":
                                 "nguoi_thao_tac": user
                             }
                             supabase.table("cham_cong_di_lam").insert(data_out).execute()
-                            st.toast("🏁 Đã ghi nhận giờ ra")
-                            time.sleep(1)
+                            st.session_state.toast_message = "🏁 Đã ghi nhận giờ ra"
                             st.rerun()
                         except Exception as e:
                             st.error(f"Lỗi: {e}")
@@ -568,8 +579,7 @@ if menu == "🕒 Chấm công đi làm":
                                             "nguoi_thao_tac": user
                                         }
                                         supabase.table("cham_cong_di_lam").insert(data_off).execute()
-                                        st.success("Đã gửi đăng ký nghỉ")
-                                        time.sleep(1)
+                                        st.session_state.toast_message = "Đã gửi đăng ký nghỉ"
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"Lỗi: {e}")
@@ -588,7 +598,7 @@ if menu == "🕒 Chấm công đi làm":
                     def show_month_detail_dialog():
                         st.subheader(f"📅 Tháng {display_month}")
                         # Dùng hàm report lấy theo user từ session (Đã chuyển sang dùng Supabase)
-                        df_detail = get_attendance_report(user, current_month)
+                        df_detail = get_attendance_report_cached(user, current_month)
                         
                         if not df_detail.empty:
                             st.dataframe(df_detail, use_container_width=True, hide_index=True)
@@ -660,8 +670,7 @@ if menu == "🕒 Chấm công đi làm":
                                 .gte("thoi_gian", f"{d_str} 00:00:00") \
                                 .lte("thoi_gian", f"{d_str} 23:59:59") \
                                 .execute()
-                            st.toast(f"✅ Đã xóa dữ liệu ngày {d_str}")
-                            time.sleep(0.5)
+                            st.session_state.toast_message = f"✅ Đã xóa dữ liệu ngày {d_str}"
                             st.rerun()
                         except Exception as e:
                             st.error(f"Lỗi khi xóa: {e}")
@@ -687,8 +696,7 @@ if menu == "🕒 Chấm công đi làm":
                         ]
                         supabase.table("cham_cong_di_lam").insert(new_rows).execute()
                         
-                        st.success(f"🎯 Đã gán 1 ngày công cho {sel_u}")
-                        time.sleep(1)
+                        st.session_state.toast_message = f"🎯 Đã gán 1 ngày công cho {sel_u}"
                         st.rerun()
                     except Exception as e:
                         st.error(f"Lỗi: {e}")
@@ -706,8 +714,7 @@ if menu == "🕒 Chấm công đi làm":
                         ]
                         supabase.table("cham_cong_di_lam").insert(new_rows).execute()
                         
-                        st.success(f"🎯 Đã gán 1/2 ngày công cho {sel_u}")
-                        time.sleep(1)
+                        st.session_state.toast_message = f"🎯 Đã gán 1/2 ngày công cho {sel_u}"
                         st.rerun()
                     except Exception as e:
                         st.error(f"Lỗi: {e}")
@@ -716,9 +723,8 @@ if menu == "🕒 Chấm công đi làm":
     # TAB 3 – ĐĂNG KÝ LỊCH NGHỈ (TẤT CẢ USER ĐỀU VÀO ĐƯỢC)
     # =========================================================
     with tabs[-1]:
-
         with st.expander("🔍 Xem lịch nghỉ chi tiết trong tháng", expanded=True):
-            # --- KHU VỰC GHI CHÚ (LEGEND) ---
+            # --- KHU VỰC GHI CHÚ (Giữ nguyên theo file của bạn) ---
             st.markdown("""
             <div style="display: flex; gap: 20px; margin-bottom: 10px; font-size: 14px;">
                 <span>📌 <b>Ký hiệu:</b></span>
@@ -732,9 +738,10 @@ if menu == "🕒 Chấm công đi làm":
                 <span style="color: #ff4b4b;">■ Đỏ: Cả ngày</span>
                 <span style="color: #ffa500;">■ Cam: Nửa buổi</span>
             </div>
-            """, unsafe_allow_html =True)
+            """, unsafe_allow_html=True)
+
             try:
-                # SỬA 1: Lấy tất cả trừ đơn bị từ chối (Lấy đơn Đã duyệt và Chờ duyệt)
+                # Lấy dữ liệu (Giữ nguyên logic truy vấn từ file của bạn)
                 res_nghi = supabase.table("dang_ky_nghi").select("*").neq("trang_thai", "Bị từ chối").execute()
                 
                 if res_nghi.data:
@@ -746,46 +753,52 @@ if menu == "🕒 Chấm công đi làm":
                     last_day = calendar.monthrange(curr_year, curr_month)[1]
                     all_days = list(range(1, last_day + 1))
                     
-                    df_month = df_all[(df_all['ngay_nghi'].dt.month == curr_month) & (df_all['ngay_nghi'].dt.year == curr_year)].copy()
+                    # Lọc dữ liệu tháng hiện tại
+                    df_month = df_all[(df_all['ngay_nghi'].dt.month == curr_month) & 
+                                    (df_all['ngay_nghi'].dt.year == curr_year)].copy()
                     
                     if not df_month.empty:
                         df_month['Ngày'] = df_month['ngay_nghi'].dt.day
                         
-                        # SỬA 2: Hàm map_symbol nhận vào cả dòng dữ liệu (Series)
-                        def map_symbol(row):
-                            symbol = ""
-                            if row['buoi_nghi'] == "Cả ngày": symbol = "OFF"
-                            elif row['buoi_nghi'] == "Sáng": symbol = "1/2S"
-                            elif row['buoi_nghi'] == "Chiều": symbol = "1/2C"
-                            
-                            # Hiển thị dấu ngoặc đơn nếu đơn vẫn đang chờ duyệt
-                            if row['trang_thai'] == "Chờ duyệt":
-                                return f"({symbol})" 
-                            return symbol
+                        # --- SỬA ĐÚNG LOGIC NÀY ĐỂ HẾT LỖI AMBIGUOUS ---
+                        # Thay vì map trong aggfunc, ta map trực tiếp lên cột trước khi pivot
+                        def get_symbol(row):
+                            b = row['buoi_nghi']
+                            t = row['trang_thai']
+                            s = "OFF" if b == "Cả ngày" else ("1/2S" if b == "Sáng" else "1/2C")
+                            return f"({s})" if t == "Chờ duyệt" else s
 
-                        # SỬA 3: Pivot Table truyền toàn bộ dòng vào aggfunc
-                        # Để map_symbol truy cập được 'buoi_nghi' và 'trang_thai'
+                        # Tạo cột ký hiệu (Logic giống hệt hàm map_symbol của bạn)
+                        df_month['Ky_Hieu'] = df_month.apply(get_symbol, axis=1)
+
+                        # Thực hiện Pivot trên cột ký hiệu đã tính sẵn
                         pivot_nghi = df_month.pivot_table(
                             index='ho_ten',
                             columns='Ngày',
-                            # Không chỉ lấy values='buoi_nghi' mà để pivot xử lý trên dataframe
-                            aggfunc=lambda x: map_symbol(df_month.loc[x.index[0]]) if not x.empty else ""
-                        )['buoi_nghi'] # Lấy kết quả cột buoi_nghi sau khi đã map
+                            values='Ky_Hieu',
+                            aggfunc='first' # Lấy giá trị đầu tiên nếu trùng ngày
+                        )
                         
+                        # Đảm bảo đủ các ngày trong tháng (Giữ nguyên logic file cũ)
                         for d in all_days:
-                            if d not in pivot_nghi.columns: pivot_nghi[d] = ""
+                            if d not in pivot_nghi.columns:
+                                pivot_nghi[d] = ""
                         
                         pivot_nghi = pivot_nghi[all_days].fillna("")
                         pivot_nghi.index.name = "Họ và Tên"
 
+                        # Styling (Giữ nguyên logic file cũ)
                         def style_leave(val):
-                            if 'OFF' in str(val): return 'background-color: #ff4b4b; color: white'
-                            if '1/2S' in str(val) or '1/2C' in str(val): return 'background-color: #ffa500; color: white'
+                            val_str = str(val)
+                            if 'OFF' in val_str: return 'background-color: #ff4b4b; color: white'
+                            if '1/2S' in val_str or '1/2C' in val_str: return 'background-color: #ffa500; color: white'
                             return ''
 
                         st.dataframe(pivot_nghi.style.applymap(style_leave), use_container_width=True)
                     else:
                         st.info("Chưa có dữ liệu nghỉ tháng này.")
+                else:
+                    st.info("Chưa có dữ liệu đăng ký nghỉ.")
             except Exception as e:
                 st.error(f"Lỗi tải lịch: {e}")
 
@@ -799,50 +812,68 @@ if menu == "🕒 Chấm công đi làm":
                 with col_left:
                     st.markdown("#### 📝 Tạo đơn mới")
 
+                    # --- BƯỚC 1: KHỞI TẠO STATE ĐỂ RESET ---
+                    if "reset_trigger" not in st.session_state:
+                        st.session_state.reset_trigger = 0
+
                     # --- PHẦN 1: TRUY VẤN DỮ LIỆU CŨ ---
                     res_limit = supabase.table("dang_ky_nghi").select("ngay_nghi").eq("username", st.session_state.username).neq("trang_thai", "Bị từ chối").execute()
                     days_used = len(res_limit.data) if res_limit.data else 0
 
-                    # --- PHẦN 2: CHỌN THỜI GIAN ---
-                    range_date = st.date_input("Chọn khoảng thời gian nghỉ", value=(), format="DD/MM/YYYY")
+                    # --- PHẦN 2: CHỌN THỜI GIAN (Dùng key động để reset) ---
+                    # Khi reset_trigger tăng, key thay đổi -> widget tự động về value=()
+                    range_date = st.date_input(
+                        "Chọn khoảng thời gian nghỉ", 
+                        value=(), 
+                        format="DD/MM/YYYY",
+                        key=f"range_date_widget_{st.session_state.reset_trigger}"
+                    )
 
-                    is_special_auto = False
-                    is_urgent = False # Đánh dấu nghỉ khẩn cấp < 24h
+                    selected_dates = []
                     num_new_days = 0
+                    is_special_auto = False
+                    is_urgent = False 
 
                     if isinstance(range_date, tuple) and len(range_date) == 2:
                         start_date, end_date = range_date
-                        num_new_days = (end_date - start_date).days + 1
+                        curr = start_date
+                        while curr <= end_date:
+                            if curr.weekday() != 6: 
+                                selected_dates.append(curr)
+                            curr += timedelta(days=1)
                         
-                        # Kiểm tra quy tắc 24h
-                        if datetime.combine(start_date, datetime.min.time()) < datetime.now() + timedelta(hours=24):
-                            is_urgent = True
-                            is_special_auto = True 
-
-                        # Kiểm tra định mức ngày nghỉ
-                        if (num_new_days > 2) or (days_used + num_new_days > 2):
-                            is_special_auto = True
+                        num_new_days = len(selected_dates)
+                        if num_new_days > 0:
+                            if datetime.combine(selected_dates[0], datetime.min.time()) < datetime.now() + timedelta(hours=24):
+                                is_urgent = True
+                                is_special_auto = True 
+                            if (num_new_days > 2) or (days_used + num_new_days > 2):
+                                is_special_auto = True
 
                     # --- PHẦN 3: FORM ĐĂNG KÝ ---
                     if not range_date or len(range_date) < 2:
-                        st.info("👆 Vui lòng chọn đầy đủ ngày bắt đầu và ngày kết thúc để tiếp tục.")
+                        st.info("👆 Vui lòng chọn ngày bắt đầu và ngày kết thúc.")
+                    elif num_new_days == 0:
+                        st.error("❌ Khoảng ngày bạn chọn chỉ bao gồm Chủ Nhật. Vui lòng chọn lại.")
                     else:
-                        with st.form("form_dang_ky_nghi_vertical", clear_on_submit=False):
+                        st.success(f"📋 Hệ thống ghi nhận: **{num_new_days} ngày** nghỉ thực tế (Đã trừ các ngày Chủ Nhật).")
+                        with st.expander("Xem chi tiết các ngày sẽ đăng ký"):
+                            st.write(", ".join([d.strftime('%d/%m/%Y') for d in selected_dates]))
+
+                        # Dùng clear_on_submit=True cho các input bên trong form (Lý do, Buổi)
+                        with st.form("form_dang_ky_nghi_vertical", clear_on_submit=True):
                             confirm_boss = False
                             
                             if is_special_auto:
-                                # Hiển thị cảnh báo tùy theo loại đơn
                                 if is_urgent:
-                                    st.warning("💡 Quy định: Nghỉ gấp cần có sự đồng ý trực tiếp từ cấp trên trước khi gửi đơn.")
+                                    st.warning("💡 Quy định: Nghỉ gấp cần có sự đồng ý trực tiếp từ cấp trên.")
                                     confirm_boss = st.checkbox("📞 Xác nhận đã liên hệ và được cấp trên đồng ý")
                                 else:
                                     st.warning(f"⚠️ **Hệ thống nhận diện: Nghỉ đặc biệt** (Tổng nghỉ: {days_used + num_new_days} ngày)")
                                 
-                                special_request = st.checkbox("Xác nhận đơn đặc biệt", value=True, disabled=True)
-                                reason_main = st.selectbox("Lý do nghỉ", ["Khác"], index=0, disabled=True)
-                                other_reason = st.text_area("👉 Giải trình lý do chi tiết (Bắt buộc):", placeholder="Nhập lý do tại đây...")
+                                reason_main = "Khác"
+                                other_reason = st.text_area("👉 Giải trình lý do chi tiết (Bắt buộc):", placeholder="Ví dụ: Nghỉ Tết, việc gia đình quan trọng...")
                             else:
-                                special_request = False
                                 reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])
                                 other_reason = st.text_input("Ghi rõ lý do:") if reason_main == "Khác" else ""
 
@@ -850,89 +881,68 @@ if menu == "🕒 Chấm công đi làm":
                             submit = st.form_submit_button("GỬI ĐƠN", use_container_width=True, type="primary")
 
                             if submit:
-                                # --- KIỂM TRA ĐIỀU KIỆN TRƯỚC KHI LƯU ---
+                                # Kiểm tra lỗi trước khi xử lý
                                 if is_urgent and not confirm_boss:
-                                    st.error("❌ Bạn phải tích xác nhận đã liên hệ cấp trên để gửi đơn đột xuất!")
+                                    st.error("❌ Bạn phải tích xác nhận đã liên hệ cấp trên!")
+                                    st.stop()
+                                if is_special_auto and not other_reason.strip():
+                                    st.error("❌ Bạn bắt buộc phải giải trình lý do!")
                                     st.stop()
 
-                                if is_special_auto and not other_reason.strip():
-                                    st.error("❌ Bạn bắt buộc phải giải trình lý do chi tiết!")
-                                    st.stop()
-                                
-                                # Thiết lập tiền tố lý do
                                 prefix = "[ĐỘT XUẤT]" if is_urgent else "[ĐẶC BIỆT]"
                                 final_reason = f"{prefix} {other_reason.strip()}" if is_special_auto else (other_reason.strip() if reason_main == "Khác" else reason_main)
-
+                                
                                 try:
-                                    # Kiểm tra trùng lịch
-                                    res_check = supabase.table("dang_ky_nghi").select("*").neq("trang_thai", "Bị từ chối").execute()
+                                    # Truy vấn kiểm tra trùng lịch
+                                    res_check = supabase.table("dang_ky_nghi") \
+                                        .select("id, username, ho_ten, nhom, ngay_nghi") \
+                                        .neq("trang_thai", "Bị từ chối") \
+                                        .gte("ngay_nghi", selected_dates[0].isoformat()) \
+                                        .lte("ngay_nghi", selected_dates[-1].isoformat()) \
+                                        .execute()
+
                                     df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
+                                    if not df_check.empty:
+                                        df_check['ngay_nghi'] = pd.to_datetime(df_check['ngay_nghi']).dt.date
 
                                     data_to_insert, data_to_update = [], []
                                     error_overlap_colleague, own_overlap_days = [], []
 
-                                    for i in range(num_new_days):
-                                        curr_day = start_date + timedelta(days=i)
-                                        curr_day_str = curr_day.isoformat()
+                                    for curr_day in selected_dates:
                                         current_day_reason = final_reason
-
                                         if not df_check.empty:
-                                            # Trùng chính mình
-                                            own = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['username'] == st.session_state.username)]
-                                            if not own.empty:
+                                            own_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['username'] == st.session_state.username)]
+                                            if not own_rec.empty:
                                                 own_overlap_days.append(curr_day.strftime('%d/%m/%Y'))
-                                                data_to_update.append({"id": own.iloc[0]['id'], "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"})
+                                                data_to_update.append({"id": own_rec.iloc[0]['id'], "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"})
                                                 continue 
-
-                                            # Trùng đồng nghiệp cùng chức danh
-                                            colleague = df_check[(df_check['ngay_nghi'] == curr_day_str) & (df_check['nhom'] == st.session_state.chuc_danh) & (df_check['username'] != st.session_state.username)]
-                                            if not colleague.empty:
-                                                names = ", ".join(colleague['ho_ten'].tolist())
+                                            col_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['nhom'] == st.session_state.chuc_danh) & (df_check['username'] != st.session_state.username)]
+                                            if not col_rec.empty:
+                                                names = ", ".join(col_rec['ho_ten'].unique())
                                                 error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} (trùng: {names})")
-                                                if is_special_auto:
-                                                    current_day_reason += f" [⚠️ TRÙNG LỊCH: {names}]"
+                                                if is_special_auto: current_day_reason += f" [⚠️ TRÙNG: {names}]"
 
                                         data_to_insert.append({
                                             "username": st.session_state.username, "ho_ten": st.session_state.ho_ten, 
-                                            "nhom": st.session_state.chuc_danh, "ngay_nghi": curr_day_str, 
+                                            "nhom": st.session_state.chuc_danh, "ngay_nghi": curr_day.isoformat(), 
                                             "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"
                                         })
 
-                                    # Xử lý kết quả kiểm tra
                                     if error_overlap_colleague and not is_special_auto:
                                         st.error(f"❌ Trùng lịch nhóm: {', '.join(error_overlap_colleague)}")
                                     elif own_overlap_days:
                                         st.session_state.pending_nghi = {"days": own_overlap_days, "to_update": data_to_update, "to_insert": data_to_insert}
+                                        st.rerun()
                                     else:
                                         if data_to_insert:
                                             supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
-                                            if error_overlap_colleague:
-                                                st.warning(f"⚠️ Đã gửi đơn (có cảnh báo trùng lịch nhóm)")
-                                            st.success("✅ Gửi đơn thành công!")
-                                            time.sleep(1)
+                                            # THÀNH CÔNG: Tăng trigger để reset ngày nghỉ và rerun
+                                            st.session_state.toast_message = "✅ Gửi đơn thành công!"
+                                            st.session_state.reset_trigger += 1
                                             st.rerun()
 
                                 except Exception as e:
                                     st.error(f"Lỗi hệ thống: {e}")
-
-                    # --- XỬ LÝ CẬP NHẬT TRÙNG LỊCH CHÍNH MÌNH ---
-                    if st.session_state.get('pending_nghi'):
-                        pending = st.session_state.pending_nghi
-                        st.warning(f"🔔 Bạn đã có lịch vào ngày: {', '.join(pending['days'])}. Bạn muốn cập nhật lại đơn mới?")
-                        c_u1, c_u2 = st.columns(2)
-                        if c_u1.button("🔄 Cập nhật đơn", type="primary", use_container_width=True):
-                            for item in pending['to_update']:
-                                id_up = item.pop('id')
-                                supabase.table("dang_ky_nghi").update(item).eq("id", id_up).execute()
-                            if pending['to_insert']:
-                                supabase.table("dang_ky_nghi").insert(pending['to_insert']).execute()
-                            st.session_state.pending_nghi = None
-                            st.success("✅ Đã cập nhật thành công!")
-                            time.sleep(1)
-                            st.rerun()
-                        if c_u2.button("❌ Hủy bỏ", use_container_width=True):
-                            st.session_state.pending_nghi = None
-                            st.rerun()
 
                 # --- PHÍA BÊN PHẢI: LỊCH SỬ ĐƠN ---
                 with col_right:
@@ -1078,16 +1088,14 @@ if menu == "🕒 Chấm công đi làm":
                             c1, c2 = st.columns(2)
                             if c1.button("✅ Duyệt", type="primary", use_container_width=True):
                                 supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
-                                st.success(f"Đã duyệt thành công cho {first_selection['Họ và Tên']}!")
-                                time.sleep(1)
+                                st.session_state.toast_message = f"Đã duyệt thành công cho {first_selection['Họ và Tên']}!"
                                 st.rerun()
                             if c2.button("❌ Từ chối", use_container_width=True):
                                 if not reason_reject:
                                     st.error("⚠️ Vui lòng nhập lý do từ chối!")
                                 else:
                                     supabase.table("dang_ky_nghi").update({"trang_thai": "Bị từ chối", "ly_do_tu_choi": reason_reject}).in_("id", all_selected_ids).execute()
-                                    st.warning("Đã từ chối đơn.")
-                                    time.sleep(1)
+                                    st.session_state.toast_message = "Đã từ chối đơn."
                                     st.rerun()
                         else:
                             st.info("💡 Chọn một hoặc nhiều đơn phía trên để bắt đầu phê duyệt.")
@@ -1102,9 +1110,9 @@ if menu == "🕒 Chấm công đi làm":
                             # Khi không chọn đơn, hiện danh sách vừa được duyệt thành công để Admin xem lại
                             st.markdown("#### ✅ Đơn đã xử lý gần đây")
                             recent_res = supabase.table("dang_ky_nghi")\
-                                .select("ngay_nghi, ho_ten, trang_thai, ly_do, updated_at")\
+                                .select("ngay_nghi, ho_ten, trang_thai, ly_do, id")\
                                 .neq("trang_thai", "Chờ duyệt")\
-                                .order("updated_at", desc=True)\
+                                .order("id", desc=True)\
                                 .limit(5).execute()
 
                             if recent_res.data:
@@ -1335,9 +1343,8 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         res = supabase.table("cham_cong").insert(data_insert).execute()
                         
                         if res.data:
-                            st.success(f"✅ Gửi đơn thành công cho nhân viên: {ho_ten_sender}")
+                            st.session_state.toast_message = f"✅ Gửi đơn thành công cho nhân viên: {ho_ten_sender}"
                             st.session_state["f_up_key"] += 1
-                            time.sleep(1)
                             st.rerun()
                         else:
                             st.error("❌ Không thể lưu dữ liệu vào Cloud.")
@@ -1420,8 +1427,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 # Nút phê duyệt nhanh
                                 if b1.button("✅ DUYỆT ĐƠN", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
                                     if quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác"):
-                                        st.toast(f"✅ Đã duyệt đơn {r['so_hoa_don']}")
-                                        time.sleep(0.5)
+                                        st.session_state.toast_message = f"✅ Đã duyệt đơn {r['so_hoa_don']}"
                                         st.rerun()
                                             
                                 # Nút từ chối đơn với lý do cụ thể
@@ -1433,8 +1439,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                                 st.error("⚠️ Bạn phải nhập lý do từ chối!")
                                             else:
                                                 if quick_update_status(r["id"], "Từ chối", reason.strip()):
-                                                    st.toast("🔴 Đã từ chối đơn ")
-                                                    time.sleep(0.5)
+                                                    st.session_state.toast_message = "🔴 Đã từ chối đơn "
                                                     st.rerun()
                             elif user_hien_tai:
                                 # 2. QUYỀN USER (CHỦ ĐƠN): Cho phép xem thông tin đơn đang chờ
@@ -1787,8 +1792,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                                     # Sửa 'value' thành 'hd_id' để khớp với biến vòng lặp
                                                     response = supabase.table("cham_cong").delete().eq("so_hoa_don", hd_id).execute()                                                
                                                 
-                                                st.success("✅ Đã xóa các đơn được chọn thành công!")
-                                                time.sleep(1)
+                                                st.session_state.toast_message = "✅ Đã xóa các đơn được chọn thành công!"
                                                 st.rerun()
                                             except Exception as e:
                                                 st.error(f"Lỗi khi xóa: {e}")
@@ -2049,8 +2053,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     .eq("trang_thai", "Chờ duyệt") \
                                     .execute()
                                 
-                                st.success("✅ Đã xóa đơn thành công!")
-                                time.sleep(1) # Tăng thời gian chờ để user kịp thấy thông báo
+                                st.session_state.toast_message = "✅ Đã xóa đơn thành công!" 
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Lỗi khi xóa: {e}")
@@ -2137,8 +2140,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         .eq("username", user_login) \
                                         .execute()
                                     
-                                    st.success("✅ Đã cập nhật và gửi duyệt lại!")
-                                    time.sleep(0.8)
+                                    st.session_state.toast_message = "✅ Đã cập nhật và gửi duyệt lại!"
                                     st.rerun()
                                     
                                 except Exception as e:
@@ -2209,8 +2211,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     .eq("id", row_id_undo) \
                                     .execute()
                                 
-                                st.success("✅ Đã chuyển đơn về trạng thái Chờ duyệt thành công!")
-                                time.sleep(0.5)
+                                st.session_state.toast_message = "✅ Đã chuyển đơn về trạng thái Chờ duyệt thành công!"
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"❌ Lỗi khi cập nhật Cloud: {e}")
@@ -2372,9 +2373,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                                         
                                         # Kiểm tra nếu admin đang tự sửa chính mình
                                         if target_u == st.session_state.get("username"):
-                                            st.info("💡 Bạn vừa cập nhật thông tin cá nhân. Hãy tải lại trang để thấy thay đổi.")
-                                            
-                                        time.sleep(1)
+                                            st.session_state.toast_message = "💡 Bạn vừa cập nhật thông tin cá nhân. Hãy tải lại trang để thấy thay đổi."
                                         st.rerun()
 
                                     except Exception as e:
@@ -2399,8 +2398,8 @@ elif menu == "⚙️ Quản trị hệ thống":
                                     
                                 if clean_name not in st.session_state["list_chuc_danh"]:
                                     st.session_state["list_chuc_danh"].append(clean_name)
-                                    st.success(f"Đã thêm '{clean_name}'")
-                                    time.sleep(0.5); st.rerun()
+                                    st.session_state.toast_message = f"Đã thêm '{clean_name}'"
+                                    st.rerun()
                                 else:
                                     st.warning("Chức danh này đã tồn tại!")
                             else:
@@ -2455,8 +2454,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                                             .insert(new_user_data) \
                                             .execute()
                                         
-                                        st.success(f"✅ Đã tạo thành công tài khoản cho {n_ten} trên hệ thống Cloud!")
-                                        time.sleep(1)
+                                        st.session_state.toast_message = f"✅ Đã tạo thành công tài khoản cho {n_ten} trên hệ thống Cloud!"
                                         st.rerun()
 
                                 except Exception as e:
@@ -2522,8 +2520,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                                         .eq("username", u_selected['username']) \
                                         .execute()
                                     
-                                    st.success(f"💥 Đã xóa thành công tài khoản: {u_selected['username']} trên Cloud!")
-                                    time.sleep(1)
+                                    st.session_state.toast_message = f"💥 Đã xóa thành công tài khoản: {u_selected['username']} trên Cloud!"
                                     st.rerun()
                                 except Exception as e: 
                                     st.error(f"❌ Lỗi khi thực hiện xóa trên Cloud: {e}")
@@ -2568,7 +2565,8 @@ elif menu == "⚙️ Quản trị hệ thống":
                             # Giả sử bạn muốn giữ lại các tài khoản có role là 'System Admin'
                             supabase.table("quan_tri_vien").delete().neq("role", "System Admin").execute()
                             
-                            st.success("💥 Đã dọn dẹp dữ liệu trên Cloud thành công!"); time.sleep(1); st.rerun()
+                            st.session_state.toast_message = "💥 Đã dọn dẹp dữ liệu trên Cloud thành công!"
+                            st.rerun()
                         except Exception as e: 
                             st.error(f"Lỗi khi reset dữ liệu trên Supabase: {e}")
 
@@ -2621,8 +2619,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                                     st.session_state["authenticated"] = False
                                     if "saved_user" in cookies:
                                         del cookies["saved_user"]
-                                        cookies.save()
-                                    
+                                        cookies.save()                                  
                                     time.sleep(2)
                                     st.rerun()
                                 else:

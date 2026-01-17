@@ -15,7 +15,8 @@ from streamlit_cookies_manager import EncryptedCookieManager
 from streamlit_local_storage import LocalStorage
 import calendar 
 import pytz
-
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 st.set_page_config(
     page_title="Đại Thành - Ứng Dụng Nội Bộ",
@@ -75,8 +76,7 @@ cookies = EncryptedCookieManager(
     password=st.secrets["COOKIE_PASSWORD"]
 )
 
-if not cookies.ready():
-    st.stop()
+
 
 #========================
 #SECTION 4. AUTH FUNCTIONS (KHÔNG UI)
@@ -135,7 +135,33 @@ def check_login_by_username(u_in):
     except Exception as e:
         st.error(f"Lỗi truy vấn Cookie từ Supabase: {e}")
         return None
+# --- SỬA LẠI SECTION 3 & 6 ---
 
+if not cookies.ready():
+    # Trong khi chờ cookie sẵn sàng, vẫn cố gắng đọc LocalStorage vì nó nhanh hơn
+    st.info("Đang kiểm tra thông tin đăng nhập...")
+    st.stop() 
+
+# Khi cookies đã ready, mới chạy logic auto login
+if not st.session_state.get("authenticated", False):
+    # 1. Thử lấy từ LocalStorage (Dùng key ngắn gọn)
+    saved_user = local_storage.getItem("backup_saved_user")
+    
+    # 2. Nếu không có, thử lấy từ Cookie
+    if saved_user and saved_user in ["None", "null", "undefined", ""]:
+        saved_user = cookies.get("saved_user")
+
+    if saved_user and saved_user not in ["None", "null", "undefined", ""]:
+        res = check_login_by_username(saved_user)
+        if res:
+            st.session_state.update({
+                "authenticated": True,
+                "role": res.get('role'),
+                "username": res.get('username'),
+                "chuc_danh": res.get('chuc_danh'),
+                "ho_ten": res.get('ho_ten')
+            })
+            st.rerun()
 #========================
 #SECTION 5. SESSION STATE INIT (DUY NHẤT)
 #========================
@@ -168,32 +194,6 @@ def format_vietnam_time(df):
         df['created_at'] = df['created_at'].dt.strftime('%d/%m/%Y %H:%M')
         
     return df
-# ========================
-# SECTION 6. AUTO LOGIN 
-# ========================
-
-# Chỉ tự động đăng nhập nếu Session chưa được xác thực
-if not st.session_state.get("authenticated", False):
-    saved_user = cookies.get("saved_user")
-# Ưu tiên 2: Nếu Cookie mất (thường gặp trên iOS), đọc từ LocalStorage
-    if not saved_user or saved_user == "None":
-        saved_user = local_storage.getItem("backup_saved_user")    
-    # Kiểm tra kỹ: cookie phải tồn tại, không rỗng, và không phải 'None' (chuỗi)
-    if saved_user and saved_user != "None" and saved_user != "": 
-        res = check_login_by_username(saved_user) 
-        
-        if res:
-            st.session_state.update({
-                "authenticated": True,
-                "role": res.get('role'),
-                "username": res.get('username'),
-                "chuc_danh": res.get('chuc_danh'),
-                "ho_ten": res.get('ho_ten')
-            })
-            # CẬP NHẬT NGƯỢC LẠI COOKIE (Để các Menu cũ không bị lỗi)
-            cookies["saved_user"] = res.get("username")
-            cookies.save()
-            st.rerun()
 
 #========================
 #SECTION 7. LOGIN UI
@@ -210,7 +210,7 @@ def login_logic():
             p_in = st.text_input("Mật khẩu", type="password")
             
             # --- BỔ SUNG CHECKBOX BỊ THIẾU ---
-            remember_me = st.checkbox("Ghi nhớ đăng nhập (30 ngày)")
+            remember_me = st.checkbox("Ghi nhớ đăng nhập")
             
             submit = st.form_submit_button("ĐĂNG NHẬP", use_container_width=True)
 
@@ -232,6 +232,8 @@ def login_logic():
 
                     # Bây giờ biến remember_me mới tồn tại để sử dụng
                     if remember_me:
+                        # Set thời hạn 30 ngày (Macbook cần thời hạn rõ ràng)
+                        expires_at = datetime.now() + timedelta(days=30)
                         cookies["saved_user"] = res.get("username")
                         cookies.save()
                     # 2. Lưu vào LocalStorage (Cho iOS/Dự phòng)
@@ -279,7 +281,7 @@ ho_ten = st.session_state.get("ho_ten", "Nhân viên")
 chuc_danh = st.session_state.get("chuc_danh", "N/A")
 
 with st.sidebar:
-
+    # ------------------------------
     st.markdown(f"### 👤 Chào: {ho_ten}")
     st.info(f"🎭 **Quyền:** {role}")
     st.caption(f"💼 **Chức danh:** {chuc_danh}")
@@ -718,7 +720,64 @@ if menu == "🕒 Chấm công đi làm":
                         st.rerun()
                     except Exception as e:
                         st.error(f"Lỗi: {e}")
+# --- BƯỚC 1: KHỞI TẠO STATE ĐỂ RESET ---
+    if "reset_trigger" not in st.session_state:
+        st.session_state.reset_trigger = 0
+    if "pending_nghi" not in st.session_state:
+        st.session_state.pending_nghi = None
+    # ==========================================
+    # PHẦN XỬ LÝ XÁC NHẬN GHI ĐÈ (CONFIRMATION)
+    # ==========================================
 
+    # Kiểm tra nếu có dữ liệu đang chờ xác nhận từ Session State
+    if st.session_state.get("pending_nghi"):
+        with st.container(border=True):
+            st.warning(f"🔔 **Xác nhận thay đổi:** {st.session_state.pending_nghi['message']}")
+            c1, c2 = st.columns(2)
+            
+            with c1:
+                if st.button("✅ Đồng ý ghi đè", use_container_width=True, type="primary"):
+                    try:
+                        p_data = st.session_state.pending_nghi
+                        
+                        # 1. Thực hiện Cập nhật các ngày trùng (Chờ duyệt -> Chờ duyệt mới)
+                        if p_data.get("to_update"):
+                            for item in p_data["to_update"]:
+                                supabase.table("dang_ky_nghi")\
+                                    .update({
+                                        "buoi_nghi": item["buoi_nghi"],
+                                        "ly_do": item["ly_do"],
+                                        "trang_thai": "Chờ duyệt",
+                                        "created_at": "now()" # Cập nhật lại thời gian gửi đơn
+                                    })\
+                                    .eq("id", item["id"])\
+                                    .execute()
+                        
+                        # 2. Thực hiện Thêm mới các ngày chưa từng có trong lịch
+                        if p_data.get("to_insert"):
+                            supabase.table("dang_ky_nghi")\
+                                .insert(p_data["to_insert"])\
+                                .execute()
+                        
+                        # 3. Dọn dẹp bộ nhớ và làm mới giao diện
+                        st.session_state.pending_nghi = None
+                        st.session_state.toast_message = "✅ Đã cập nhật và gửi đơn thành công!"
+                        st.session_state.reset_trigger = st.session_state.get("reset_trigger", 0) + 1
+                        
+                        # Xóa cache để lịch sử hiển thị đúng dữ liệu mới nhất
+                        st.cache_data.clear()
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Lỗi khi thực hiện ghi đè: {e}")
+            
+            with c2:
+                if st.button("❌ Hủy bỏ", use_container_width=True):
+                    # Xóa dữ liệu chờ và quay lại trạng thái bình thường
+                    st.session_state.pending_nghi = None
+                    st.rerun()
+
+    # ==========================================
     # =========================================================
     # TAB 3 – ĐĂNG KÝ LỊCH NGHỈ (TẤT CẢ USER ĐỀU VÀO ĐƯỢC)
     # =========================================================
@@ -812,10 +871,6 @@ if menu == "🕒 Chấm công đi làm":
                 with col_left:
                     st.markdown("#### 📝 Tạo đơn mới")
 
-                    # --- BƯỚC 1: KHỞI TẠO STATE ĐỂ RESET ---
-                    if "reset_trigger" not in st.session_state:
-                        st.session_state.reset_trigger = 0
-
                     # --- PHẦN 1: TRUY VẤN DỮ LIỆU CŨ ---
                     res_limit = supabase.table("dang_ky_nghi").select("ngay_nghi").eq("username", st.session_state.username).neq("trang_thai", "Bị từ chối").execute()
                     days_used = len(res_limit.data) if res_limit.data else 0
@@ -851,6 +906,7 @@ if menu == "🕒 Chấm công đi làm":
                                 is_special_auto = True
 
                     # --- PHẦN 3: FORM ĐĂNG KÝ ---
+                    # --- LOGIC HIỂN THỊ VÀ FORM ĐĂNG KÝ ---
                     if not range_date or len(range_date) < 2:
                         st.info("👆 Vui lòng chọn ngày bắt đầu và ngày kết thúc.")
                     elif num_new_days == 0:
@@ -860,89 +916,143 @@ if menu == "🕒 Chấm công đi làm":
                         with st.expander("Xem chi tiết các ngày sẽ đăng ký"):
                             st.write(", ".join([d.strftime('%d/%m/%Y') for d in selected_dates]))
 
-                        # Dùng clear_on_submit=True cho các input bên trong form (Lý do, Buổi)
+                        # Sử dụng clear_on_submit=True kết hợp với key reset_trigger để làm sạch form tuyệt đối
                         with st.form("form_dang_ky_nghi_vertical", clear_on_submit=True):
                             confirm_boss = False
+                            other_reason = ""
                             
+                            # Tạo key động dựa trên reset_trigger để ép reset widget khi gửi thành công
+                            form_key_suffix = st.session_state.get("reset_trigger", 0)
+
                             if is_special_auto:
                                 if is_urgent:
                                     st.warning("💡 Quy định: Nghỉ gấp cần có sự đồng ý trực tiếp từ cấp trên.")
                                     confirm_boss = st.checkbox("📞 Xác nhận đã liên hệ và được cấp trên đồng ý")
                                 else:
-                                    st.warning(f"⚠️ **Hệ thống nhận diện: Nghỉ đặc biệt** (Tổng nghỉ: {days_used + num_new_days} ngày)")
+                                    st.warning(f"⚠️ **Lưu ý số ngày đã nghỉ {days_used} ngày(gồm cả chờ duyệt))")
                                 
                                 reason_main = "Khác"
-                                other_reason = st.text_area("👉 Giải trình lý do chi tiết (Bắt buộc):", placeholder="Ví dụ: Nghỉ Tết, việc gia đình quan trọng...")
+                                other_reason = st.text_area(
+                                    "👉 Giải trình lý do chi tiết (Bắt buộc):", 
+                                    placeholder="Ví dụ: Nghỉ Tết, việc gia đình quan trọng...",
+                                    key=f"special_reason_{form_key_suffix}"
+                                )
                             else:
-                                reason_main = st.selectbox("Lý do nghỉ", ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"])
-                                other_reason = st.text_input("Ghi rõ lý do:") if reason_main == "Khác" else ""
+                                reason_main = st.selectbox(
+                                    "Lý do nghỉ", 
+                                    ["Nghỉ phép", "Việc nhà", "Nghỉ không phép", "Khác"],
+                                    key=f"reason_select_{form_key_suffix}"
+                                )
+                                # Dùng container để tránh việc gán biến rỗng làm mất dữ liệu khi user đổi ý
+                                if reason_main == "Khác":
+                                    other_reason = st.text_input("Ghi rõ lý do:", key=f"other_reason_text_{form_key_suffix}")
 
-                            session_off = st.selectbox("Buổi nghỉ", ["Cả ngày", "Sáng", "Chiều"])
+                            session_off = st.selectbox("Buổi nghỉ", ["Cả ngày", "Sáng", "Chiều"], key=f"session_{form_key_suffix}")
                             submit = st.form_submit_button("GỬI ĐƠN", use_container_width=True, type="primary")
 
                             if submit:
-                                # Kiểm tra lỗi trước khi xử lý
+                                # 1. Validation (Kiểm tra lỗi nhập liệu)
+                                error_found = False
                                 if is_urgent and not confirm_boss:
                                     st.error("❌ Bạn phải tích xác nhận đã liên hệ cấp trên!")
-                                    st.stop()
-                                if is_special_auto and not other_reason.strip():
+                                    error_found = True
+                                elif (is_special_auto or reason_main == "Khác") and not other_reason.strip():
                                     st.error("❌ Bạn bắt buộc phải giải trình lý do!")
-                                    st.stop()
+                                    error_found = True
 
-                                prefix = "[ĐỘT XUẤT]" if is_urgent else "[ĐẶC BIỆT]"
-                                final_reason = f"{prefix} {other_reason.strip()}" if is_special_auto else (other_reason.strip() if reason_main == "Khác" else reason_main)
-                                
-                                try:
-                                    # Truy vấn kiểm tra trùng lịch
-                                    res_check = supabase.table("dang_ky_nghi") \
-                                        .select("id, username, ho_ten, nhom, ngay_nghi") \
-                                        .neq("trang_thai", "Bị từ chối") \
-                                        .gte("ngay_nghi", selected_dates[0].isoformat()) \
-                                        .lte("ngay_nghi", selected_dates[-1].isoformat()) \
-                                        .execute()
+                                # 2. Xử lý logic kiểm tra trùng và phân loại
+                                if not error_found and selected_dates:
+                                    try:
+                                        prefix = "[ĐỘT XUẤT]" if is_urgent else "[ĐẶC BIỆT]"
+                                        final_reason = f"{prefix} {other_reason.strip()}" if is_special_auto else (other_reason.strip() if reason_main == "Khác" else reason_main)
+                                        
+                                        # Truy vấn kiểm tra trùng cho cả bản thân và đồng nghiệp
+                                        res_check = supabase.table("dang_ky_nghi") \
+                                            .select("id, username, ho_ten, nhom, ngay_nghi, trang_thai") \
+                                            .neq("trang_thai", "Bị từ chối") \
+                                            .gte("ngay_nghi", selected_dates[0].isoformat()) \
+                                            .lte("ngay_nghi", selected_dates[-1].isoformat()) \
+                                            .execute()
 
-                                    df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
-                                    if not df_check.empty:
-                                        df_check['ngay_nghi'] = pd.to_datetime(df_check['ngay_nghi']).dt.date
-
-                                    data_to_insert, data_to_update = [], []
-                                    error_overlap_colleague, own_overlap_days = [], []
-
-                                    for curr_day in selected_dates:
-                                        current_day_reason = final_reason
+                                        df_check = pd.DataFrame(res_check.data) if res_check.data else pd.DataFrame()
                                         if not df_check.empty:
-                                            own_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['username'] == st.session_state.username)]
-                                            if not own_rec.empty:
-                                                own_overlap_days.append(curr_day.strftime('%d/%m/%Y'))
-                                                data_to_update.append({"id": own_rec.iloc[0]['id'], "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"})
-                                                continue 
-                                            col_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['nhom'] == st.session_state.chuc_danh) & (df_check['username'] != st.session_state.username)]
-                                            if not col_rec.empty:
-                                                names = ", ".join(col_rec['ho_ten'].unique())
-                                                error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} (trùng: {names})")
-                                                if is_special_auto: current_day_reason += f" [⚠️ TRÙNG: {names}]"
+                                            df_check['ngay_nghi'] = pd.to_datetime(df_check['ngay_nghi']).dt.date
 
-                                        data_to_insert.append({
-                                            "username": st.session_state.username, "ho_ten": st.session_state.ho_ten, 
-                                            "nhom": st.session_state.chuc_danh, "ngay_nghi": curr_day.isoformat(), 
-                                            "buoi_nghi": session_off, "ly_do": current_day_reason, "trang_thai": "Chờ duyệt"
-                                        })
+                                        data_to_insert, data_to_update = [], []
+                                        error_overlap_colleague = []
+                                        days_already_approved = []
+                                        days_waiting_approval = []
 
-                                    if error_overlap_colleague and not is_special_auto:
-                                        st.error(f"❌ Trùng lịch nhóm: {', '.join(error_overlap_colleague)}")
-                                    elif own_overlap_days:
-                                        st.session_state.pending_nghi = {"days": own_overlap_days, "to_update": data_to_update, "to_insert": data_to_insert}
-                                        st.rerun()
-                                    else:
-                                        if data_to_insert:
-                                            supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
-                                            # THÀNH CÔNG: Tăng trigger để reset ngày nghỉ và rerun
-                                            st.session_state.toast_message = "✅ Gửi đơn thành công!"
-                                            st.session_state.reset_trigger += 1
+                                        for curr_day in selected_dates:
+                                            current_day_reason = final_reason
+                                            if not df_check.empty:
+                                                # A. KIỂM TRA TRÙNG LỊCH BẢN THÂN
+                                                own_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['username'] == st.session_state.username)]
+                                                if not own_rec.empty:
+                                                    status = own_rec.iloc[0]['trang_thai']
+                                                    day_str = curr_day.strftime('%d/%m/%Y')
+                                                    
+                                                    if status == "Đã duyệt":
+                                                        days_already_approved.append(day_str)
+                                                    else: # Trạng thái "Chờ duyệt"
+                                                        days_waiting_approval.append(day_str)
+                                                        data_to_update.append({
+                                                            "id": own_rec.iloc[0]['id'], 
+                                                            "buoi_nghi": session_off, 
+                                                            "ly_do": current_day_reason
+                                                        })
+                                                    continue 
+                                                
+                                                # B. KIỂM TRA TRÙNG LỊCH ĐỒNG NGHIỆP TRONG NHÓM
+                                                col_rec = df_check[(df_check['ngay_nghi'] == curr_day) & (df_check['nhom'] == st.session_state.chuc_danh) & (df_check['username'] != st.session_state.username)]
+                                                if not col_rec.empty:
+                                                    names = ", ".join(col_rec['ho_ten'].unique())
+                                                    error_overlap_colleague.append(f"{curr_day.strftime('%d/%m/%Y')} (trùng: {names})")
+                                                    if is_special_auto: 
+                                                        current_day_reason += f" [⚠️ TRÙNG: {names}]"
+
+                                            # C. NẾU KHÔNG TRÙNG BẢN THÂN -> CHUẨN BỊ INSERT
+                                            data_to_insert.append({
+                                                "username": st.session_state.username, 
+                                                "ho_ten": st.session_state.ho_ten, 
+                                                "nhom": st.session_state.chuc_danh, 
+                                                "ngay_nghi": curr_day.isoformat(), 
+                                                "buoi_nghi": session_off, 
+                                                "ly_do": current_day_reason, 
+                                                "trang_thai": "Chờ duyệt"
+                                            })
+
+                                        # 3. PHẢN HỒI KẾT QUẢ
+                                        # Ưu tiên 1: Chặn nếu trùng ngày ĐÃ DUYỆT
+                                        if days_already_approved:
+                                            st.error(f"❌ Không thể đăng ký! Các ngày sau đã được duyệt trước đó: {', '.join(days_already_approved)}")
+                                        
+                                        # Ưu tiên 2: Chặn trùng nhóm (nếu không phải trường hợp đặc biệt)
+                                        elif error_overlap_colleague and not is_special_auto:
+                                            st.error(f"❌ Trùng lịch nhóm: {', '.join(error_overlap_colleague)}")
+                                        
+                                        # Ưu tiên 3: Hỏi xác nhận nếu có ngày CHỜ DUYỆT
+                                        elif days_waiting_approval:
+                                            st.session_state.pending_nghi = {
+                                                "message": f"Bạn có đơn đang CHỜ DUYỆT vào ngày {', '.join(days_waiting_approval)}. Bạn có muốn GHI ĐÈ không?",
+                                                "to_update": data_to_update, 
+                                                "to_insert": data_to_insert
+                                            }
                                             st.rerun()
+                                        
+                                        # Ưu tiên 4: Thực hiện Insert nếu mọi thứ đều mới
+                                        else:
+                                            if data_to_insert:
+                                                supabase.table("dang_ky_nghi").insert(data_to_insert).execute()
+                                                st.session_state.toast_message = "✅ Gửi đơn thành công!"
+                                                st.session_state.reset_trigger = st.session_state.get("reset_trigger", 0) + 1
+                                                st.cache_data.clear() 
+                                                st.rerun()
+                                            else:
+                                                st.warning("⚠️ Không có ngày mới nào để đăng ký.")
 
-                                except Exception as e:
-                                    st.error(f"Lỗi hệ thống: {e}")
+                                    except Exception as e:
+                                        st.error(f"Lỗi hệ thống: {e}")
 
                 # --- PHÍA BÊN PHẢI: LỊCH SỬ ĐƠN ---
                 with col_right:
@@ -994,7 +1104,7 @@ if menu == "🕒 Chấm công đi làm":
             history_res = supabase_client.table("dang_ky_nghi")\
                 .select("ngay_nghi, trang_thai, ly_do_tu_choi, buoi_nghi, ly_do")\
                 .eq("username", username)\
-                .order("ngay_nghi", desc=True).limit(10).execute() # Giới hạn 10 đơn gần nhất để nhanh hơn
+                .order("ngay_nghi", desc=False).limit(10).execute() # Giới hạn 10 đơn gần nhất để nhanh hơn
             
             if history_res.data:
                 for item in history_res.data:
@@ -1006,15 +1116,44 @@ if menu == "🕒 Chấm công đi làm":
         
             history_res = supabase_client.table("dang_ky_nghi")\
                 .select("ngay_nghi, ho_ten, trang_thai, ly_do")\
-                .order("created_at", desc=True).limit(5).execute()
+                .order("created_at", desc=False).limit(5).execute()
             
             if history_res.data:
-                st.markdown("##### 📢 Hoạt động gần đây (Toàn hệ thống)")
-                for item in history_res.data:
-                    with st.container(border=True):
-                        d_str = pd.to_datetime(item['ngay_nghi']).strftime('%d/%m/%Y')
-                        st.markdown(f"**{item['ho_ten']}** - 📅 {d_str}")
-                        st.caption(f"Trạng thái: {item['trang_thai']} | Lý do: {item['ly_do']}")
+                st.markdown("#### 📢 Hoạt động gần đây (Toàn hệ thống)")
+
+                # 1. Tạo thanh công cụ bộ lọc (Filter bar)
+                c_filter1, c_filter2 = st.columns([2, 1])
+
+                with c_filter1:
+                    search_name = st.text_input("🔍 Tìm tên nhân viên", placeholder="Nhập tên...", label_visibility="collapsed")
+
+                with c_filter2:
+                    filter_status = st.selectbox(
+                        "Lọc trạng thái",
+                        ["Tất cả", "Chờ duyệt", "Đã duyệt", "Bị từ chối"],
+                        label_visibility="collapsed"
+                    )
+
+                # 2. Xử lý logic lọc dữ liệu từ history_res.data
+                filtered_data = history_res.data
+
+                if search_name:
+                    filtered_data = [item for item in filtered_data if search_name.lower() in item['ho_ten'].lower()]
+
+                if filter_status != "Tất cả":
+                    filtered_data = [item for item in filtered_data if item['trang_thai'] == filter_status]
+
+                # 3. Hiển thị danh sách đã lọc vào vùng cuộn
+                with st.container(height=500, border=False):
+                    if not filtered_data:
+                        st.info("Không tìm thấy dữ liệu phù hợp.")
+                    else:
+                        for item in filtered_data:
+                            with st.container(border=True):
+                                d_str = pd.to_datetime(item['ngay_nghi']).strftime('%d/%m/%Y')
+                                # Highlight tên nhân viên nếu đang tìm kiếm
+                                st.markdown(f"**{item['ho_ten']}** - 📅 {d_str}")
+                                st.caption(f"Trạng thái: {item['trang_thai']} | Lý do: {item['ly_do']}")
             else:
                 st.info("Chưa có dữ liệu lịch sử hệ thống.")
         # 3. KHU VỰC SYSTEM ADMIN – PHÊ DUYỆT + LỊCH SỬ
@@ -1130,7 +1269,7 @@ if menu == "🕒 Chấm công đi làm":
                             recent_res = supabase.table("dang_ky_nghi")\
                                 .select("ngay_nghi, ho_ten, trang_thai, ly_do, id")\
                                 .neq("trang_thai", "Chờ duyệt")\
-                                .order("id", desc=True)\
+                                .order("id", desc=False)\
                                 .limit(5).execute()
 
                             if recent_res.data:
@@ -2530,6 +2669,8 @@ elif menu == "⚙️ Quản trị hệ thống":
                             # Cơ chế bảo vệ: Không để hệ thống mồ côi (luôn phải có ít nhất 1 System Admin)
                             if u_selected['role'] == 'System Admin' and count_sysadmin <= 1:
                                 st.error("❌ **Lỗi bảo mật:** Không thể xóa System Admin cuối cùng của hệ thống!")
+                            elif u_selected['role'] == 'System Admin' and u_selected['username'] == 'admin':
+                                st.error("❌ **Lỗi bảo mật:** Không thể xóa tài khoản của người phát triển hệ thống!")
                             else:
                                 try:
                                     # Thực hiện lệnh DELETE trên Supabase

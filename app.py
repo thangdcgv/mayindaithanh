@@ -201,7 +201,7 @@ def load_data():
 @st.cache_data(ttl=300)
 def load_data_nghi(reset_trigger):
     # 1. Kiểm tra chính xác tên bảng (thường là dang_ky_nghi)
-    res = supabase.table("dang_ky_nghi").select("*, quan_tri_vien(ho_ten)").execute()
+    res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
     
     if res and res.data:
         df = pd.DataFrame(res.data)
@@ -1182,7 +1182,7 @@ if menu == "🕒 Chấm công đi làm":
             # --- PHẦN 3: PHÊ DUYỆT & QUẢN LÝ (LUÔN HIỂN THỊ) ---
             with st.expander("🛠️ Phê duyệt & Quản lý đơn nghỉ", expanded=True):
                 # 1. Truy vấn dữ liệu chờ duyệt
-                res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
+                # res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
 
                 # Khởi tạo layout cột trước để luôn hiển thị khung giao diện
                 if res.data:

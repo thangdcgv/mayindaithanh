@@ -200,21 +200,33 @@ def load_data():
     return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
 @st.cache_data(ttl=300)
 def load_data_nghi(reset_trigger):
-    # 1. Kiểm tra chính xác tên bảng (thường là dang_ky_nghi)
-    res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
-    
-    if res and res.data:
-        df = pd.DataFrame(res.data)
+    try:
+        # 1. Cải tiến Select: Lấy thêm quan_tri_vien(ho_ten) để có cột 'Tên'
+        res = supabase.table("dang_ky_nghi")\
+            .select("*, quan_tri_vien(ho_ten)")\
+            .order("ngay_nghi", desc=True)\
+            .execute()
         
-        # 2. Xử lý chuyển đổi ngày tháng NGAY TRONG HÀM CACHE
-        if 'ngay_nghi' in df.columns:
-            df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi'])
-        
-        # Xử lý lấy tên nhân viên an toàn
-        if 'quan_tri_vien' in df.columns:
-            df['Tên'] = df['quan_tri_vien'].apply(lambda x: x['ho_ten'] if isinstance(x, dict) else "N/A")
+        if res and res.data:
+            df = pd.DataFrame(res.data)
             
-        return df
+            # 2. Chuyển đổi ngày tháng an toàn (Thêm errors='coerce')
+            if 'ngay_nghi' in df.columns:
+                df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi'], errors='coerce')
+            
+            # 3. Lấy tên nhân viên từ bảng liên kết
+            if 'quan_tri_vien' in df.columns:
+                # Nếu quan_tri_vien là dict (do dùng select liên kết), lấy ho_ten
+                df['Tên'] = df['quan_tri_vien'].apply(lambda x: x.get('ho_ten') if isinstance(x, dict) else "N/A")
+            else:
+                # Phòng trường hợp không join được bảng
+                df['Tên'] = "N/A"
+                
+            return df
+            
+    except Exception as e:
+        st.error(f"Lỗi tải dữ liệu nghỉ: {e}")
+        
     return pd.DataFrame()
 #========================
 #SECTION 7. LOGIN UI

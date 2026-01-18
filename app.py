@@ -199,9 +199,23 @@ def load_data():
     res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
     return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
 @st.cache_data(ttl=300)
-def load_data_nghi():
-    res = supabase.table("dang_ki_nghi").select("*, quan_tri_vien(ho_ten)").execute()
-    return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
+def load_data_nghi(reset_trigger):
+    # 1. Kiểm tra chính xác tên bảng (thường là dang_ky_nghi)
+    res = supabase.table("dang_ky_nghi").select("*, quan_tri_vien(ho_ten)").execute()
+    
+    if res and res.data:
+        df = pd.DataFrame(res.data)
+        
+        # 2. Xử lý chuyển đổi ngày tháng NGAY TRONG HÀM CACHE
+        if 'ngay_nghi' in df.columns:
+            df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi'])
+        
+        # Xử lý lấy tên nhân viên an toàn
+        if 'quan_tri_vien' in df.columns:
+            df['Tên'] = df['quan_tri_vien'].apply(lambda x: x['ho_ten'] if isinstance(x, dict) else "N/A")
+            
+        return df
+    return pd.DataFrame()
 #========================
 #SECTION 7. LOGIN UI
 #========================
@@ -1172,8 +1186,13 @@ if menu == "🕒 Chấm công đi làm":
 
                 # Khởi tạo layout cột trước để luôn hiển thị khung giao diện
                 if res.data:
-                    df_raw = load_data_nghi()
-
+                    df_raw = load_data_nghi(st.session_state.get('reset_trigger', 0))
+                    # Kiểm tra an toàn trước khi thao tác tiếp
+                if not df_raw.empty:
+                    # Ở đây df_raw đã có sẵn cột 'ngay_nghi' đã được format
+                    st.write(df_raw)
+                else:
+                    st.info("ℹ️ Chưa có dữ liệu đăng ký nghỉ.")
                     df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
                     
                     # --- LOGIC GOM NHÓM TỐI ƯU ---

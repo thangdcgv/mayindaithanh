@@ -198,7 +198,10 @@ def format_vietnam_time(df):
 def load_data():
     res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
     return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
-
+@st.cache_data(ttl=300)
+def load_data_nghi():
+    res = supabase.table("dang_ki_nghi").select("*, quan_tri_vien(ho_ten)").execute()
+    return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
 #========================
 #SECTION 7. LOGIN UI
 #========================
@@ -1169,7 +1172,7 @@ if menu == "🕒 Chấm công đi làm":
 
                 # Khởi tạo layout cột trước để luôn hiển thị khung giao diện
                 if res.data:
-                    df_raw = load_data()
+                    df_raw = load_data_nghi()
 
                     df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
                     

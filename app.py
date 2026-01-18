@@ -1188,12 +1188,12 @@ if menu == "🕒 Chấm công đi làm":
                 if res.data:
                     df_raw = load_data_nghi(st.session_state.get('reset_trigger', 0))
                     # Kiểm tra an toàn trước khi thao tác tiếp
-                if not df_raw.empty:
-                    # Ở đây df_raw đã có sẵn cột 'ngay_nghi' đã được format
-                    st.write(df_raw)
-                else:
-                    st.info("ℹ️ Chưa có dữ liệu đăng ký nghỉ.")
-                    df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
+                    if not df_raw.empty:
+                        # Ở đây df_raw đã có sẵn cột 'ngay_nghi' đã được format
+                        st.write(df_raw)
+                    else:
+                        st.info("ℹ️ Chưa có dữ liệu đăng ký nghỉ.")
+                        df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
                     
                     # --- LOGIC GOM NHÓM TỐI ƯU ---
                     def group_consecutive_days(group):

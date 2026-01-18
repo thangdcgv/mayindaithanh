@@ -1193,106 +1193,121 @@ if menu == "🕒 Chấm công đi làm":
         if role == "System Admin":
             # --- PHẦN 3: PHÊ DUYỆT & QUẢN LÝ (LUÔN HIỂN THỊ) ---
             with st.expander("🛠️ Phê duyệt & Quản lý đơn nghỉ", expanded=True):
-                # 1. Truy vấn dữ liệu chờ duyệt
-                # res = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("ho_ten").order("ngay_nghi").execute()
+                # 1. Tải dữ liệu thông qua hàm Cache (đảm bảo hàm load_data_nghi đã có @st.cache_data)
+                # reset_trigger giúp làm mới dữ liệu khi có thay đổi
+                df_raw = load_data_nghi(st.session_state.get('reset_trigger', 0))
 
-                # Khởi tạo layout cột trước để luôn hiển thị khung giao diện
-                if res.data:
-                    df_raw = load_data_nghi(st.session_state.get('reset_trigger', 0))
-                    # Kiểm tra an toàn trước khi thao tác tiếp
-                    if not df_raw.empty:
-                        # Ở đây df_raw đã có sẵn cột 'ngay_nghi' đã được format
-                        st.write(df_raw)
-                    else:
-                        st.info("ℹ️ Chưa có dữ liệu đăng ký nghỉ.")
-                        df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
-                    
-                    # --- LOGIC GOM NHÓM TỐI ƯU ---
-                    def group_consecutive_days(group):
-                        group = group.sort_values('ngay_nghi')
-                        day_diff = group['ngay_nghi'].diff().dt.days != 1
-                        group_id = day_diff.cumsum()
-                        
-                        res_groups = []
-                        for _, g in group.groupby(group_id):
-                            res_groups.append({
-                                "username": g['username'].iloc[0],
-                                "Họ và Tên": g['ho_ten'].iloc[0],
-                                "Chức danh": g['nhom'].iloc[0],
-                                "Từ ngày": g['ngay_nghi'].min().strftime('%d/%m/%Y'),
-                                "Đến ngày": g['ngay_nghi'].max().strftime('%d/%m/%Y'),
-                                "Tổng ngày": len(g),
-                                "Buổi nghỉ": g['buoi_nghi'].iloc[0],
-                                "Lý do đăng ký": g['ly_do'].iloc[0],
-                                "ids": g['id'].tolist()
-                            })
-                        return res_groups
+                # Khởi tạo các biến chứa dữ liệu để tránh lỗi NameError
+                grouped_data = []
+                df_display = pd.DataFrame()
 
-                    grouped_data = []
-                    if not df_raw.empty:
-                        for _, subgroup in df_raw.groupby(['username', 'ly_do', 'buoi_nghi']):
+                # Kiểm tra nếu có dữ liệu gốc
+                if not df_raw.empty:
+                    # Lọc chỉ lấy các đơn đang ở trạng thái 'Chờ duyệt' để Admin xử lý
+                    df_pending = df_raw[df_raw['trang_thai'] == "Chờ duyệt"].copy()
+
+                    if not df_pending.empty:
+                        # --- LOGIC GOM NHÓM NGÀY LIÊN TIẾP ---
+                        def group_consecutive_days(group):
+                            # Sắp xếp theo ngày để tính toán liên tiếp
+                            group = group.sort_values('ngay_nghi')
+                            
+                            # Tạo mã nhóm cho các ngày liên tiếp
+                            day_diff = group['ngay_nghi'].diff().dt.days != 1
+                            group_id = day_diff.cumsum()
+                            
+                            res_groups = []
+                            for _, g in group.groupby(group_id):
+                                # Sử dụng .iloc[0] để lấy giá trị đầu tiên của nhóm mà không quan tâm đến index
+                                res_groups.append({
+                                    "username": g['username'].iloc[0],
+                                    "Họ và Tên": g['ho_ten'].iloc[0] if 'ho_ten' in g.columns else "N/A",
+                                    "Chức danh": g['nhom'].iloc[0] if 'nhom' in g.columns else "N/A",
+                                    "Từ ngày": g['ngay_nghi'].min().strftime('%d/%m/%Y'),
+                                    "Đến ngày": g['ngay_nghi'].max().strftime('%d/%m/%Y'),
+                                    "Tổng ngày": len(g),
+                                    "Buổi nghỉ": g['buoi_nghi'].iloc[0] if 'buoi_nghi' in g.columns else "N/A",
+                                    "Lý do đăng ký": g['ly_do'].iloc[0] if 'ly_do' in g.columns else "N/A",
+                                    "ids": g['id'].tolist()
+                                })
+                            return res_groups
+
+                        # Thực hiện gom nhóm theo User, Lý do và Buổi nghỉ
+                        for _, subgroup in df_pending.groupby(['username', 'ly_do', 'buoi_nghi']):
                             grouped_data.extend(group_consecutive_days(subgroup))
 
-                    df_display = pd.DataFrame(grouped_data)
+                        df_display = pd.DataFrame(grouped_data)
+                    else:
+                        st.info("ℹ️ Hiện không có đơn nào đang chờ duyệt.")
+                else:
+                    st.info("ℹ️ Hệ thống chưa có dữ liệu đăng ký nghỉ.")
 
-                    # 2. Hiển thị bảng chọn đơn
-                    st.write("📌 *Danh sách đơn chờ xử lý:*")
+                # 2. Hiển thị bảng chọn đơn (Chỉ hiện khi có đơn chờ duyệt)
+                if not df_display.empty:
+                    st.write("📌 *Danh sách đơn chờ xử lý (Chọn hàng để thao tác):*")
+                    
+                    # Loại bỏ cột 'ids' trước khi hiển thị để bảng gọn đẹp
                     event = st.dataframe(
                         df_display.drop(columns=['ids']), 
                         use_container_width=True,
                         hide_index=True,
                         on_select="rerun",
                         selection_mode="multi-row",
-                        key="df_approve_table_v2"
+                        key="df_approve_table_v3"
                     )
 
                     selected_indices = event.selection.rows
                     st.divider()
 
-                    # --- PHẦN 2: LUÔN HIỂN THỊ CHI TIẾT & LỊCH SỬ ---
+                    # --- PHẦN 2: XỬ LÝ CHI TIẾT & LỊCH SỬ ---
                     col_form, col_history = st.columns([2, 3])
 
                     # A. KHỐI XỬ LÝ ĐƠN (Bên trái)
                     with col_form:
                         if selected_indices:
                             first_selection = df_display.iloc[selected_indices[0]]
+                            # Gom tất cả các ID từ các hàng được chọn để xử lý hàng loạt
                             all_selected_ids = []
                             for idx in selected_indices:
                                 all_selected_ids.extend(df_display.iloc[idx]['ids'])
 
                             st.markdown(f"#### 📝 Xử lý đơn: **{first_selection['Họ và Tên']}**")
+                            st.caption(f"Đang chọn {len(all_selected_ids)} ngày nghỉ.")
                             
-                            # Admin chỉ cần nhập vào đây khi muốn Từ chối
-                            reason_reject = st.text_area("Lý do từ chối (Bắt buộc nếu từ chối):", 
-                                                        placeholder="Nhập lý do để thay thế lý do đăng ký của nhân viên...",
+                            reason_reject = st.text_area("Lý do từ chối (Bắt buộc nếu bấm Từ chối):", 
+                                                        placeholder="Nhập nội dung phản hồi cho nhân viên...",
                                                         key="reject_area_admin")
                             
                             c1, c2 = st.columns(2)
                             
-                            # --- NÚT DUYỆT ---
+                            # NÚT DUYỆT
                             if c1.button("✅ Duyệt", type="primary", use_container_width=True):
-                                # Khi duyệt, chỉ cập nhật trạng thái, không quan tâm đến ô lý do
-                                supabase.table("dang_ky_nghi").update({
-                                    "trang_thai": "Đã duyệt"
-                                }).in_("id", all_selected_ids).execute()
-                                
-                                st.session_state.toast_message = f"Đã duyệt thành công cho {first_selection['Họ và Tên']}!"
-                                st.rerun()
+                                try:
+                                    supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
+                                    # Xóa cache và tăng trigger để tải lại dữ liệu mới ngay lập tức
+                                    st.cache_data.clear()
+                                    st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
+                                    st.session_state.toast_message = f"✅ Đã duyệt đơn cho {first_selection['Họ và Tên']}!"
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Lỗi khi duyệt: {e}")
 
-                            # --- NÚT TỪ CHỐI ---
+                            # NÚT TỪ CHỐI
                             if c2.button("❌ Từ chối", use_container_width=True):
                                 if not reason_reject.strip():
-                                    st.error("⚠️ Vui lòng nhập lý do từ chối để cập nhật vào đơn!")
+                                    st.error("⚠️ Bạn phải nhập lý do từ chối!")
                                 else:
-                                    # Cập nhật trạng thái VÀ ghi đè lý do từ chối vào cột 'ly_do'
-                                    # (Bạn có thể cập nhật thêm cột 'ly_do_tu_choi' nếu muốn lưu song song)
-                                    supabase.table("dang_ky_nghi").update({
-                                        "trang_thai": "Bị từ chối", 
-                                        "ly_do": f"❌ TỪ CHỐI: {reason_reject.strip()}" # Ghi đè lý do admin vào đây
-                                    }).in_("id", all_selected_ids).execute()
-                                    
-                                    st.session_state.toast_message = "Đã từ chối đơn và cập nhật lý do."
-                                    st.rerun()
+                                    try:
+                                        supabase.table("dang_ky_nghi").update({
+                                            "trang_thai": "Bị từ chối", 
+                                            "ly_do": f"❌ TỪ CHỐI: {reason_reject.strip()}"
+                                        }).in_("id", all_selected_ids).execute()
+                                        st.cache_data.clear()
+                                        st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
+                                        st.session_state.toast_message = "❌ Đã từ chối đơn thành công."
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Lỗi khi từ chối: {e}")
                         else:
                             st.info("💡 Chọn một hoặc nhiều đơn phía trên để bắt đầu phê duyệt.")
 
@@ -1301,14 +1316,15 @@ if menu == "🕒 Chấm công đi làm":
                         if selected_indices:
                             first_selection = df_display.iloc[selected_indices[0]]
                             st.markdown(f"#### 🕒 Lịch sử: **{first_selection['Họ và Tên']}**")
+                            # Hàm hiển thị lịch sử nghỉ của riêng User đang chọn
                             display_user_history(first_selection['username'], supabase)
                         else:
-                            # Khi không chọn đơn, hiện danh sách vừa được duyệt thành công để Admin xem lại
-                            st.markdown("#### ✅ Đơn đã xử lý gần đây")
+                            st.markdown("#### ✅ Đã xử lý gần đây")
+                            # Hiển thị 5 đơn vừa mới xử lý xong (Đã duyệt/Từ chối) để Admin theo dõi
                             recent_res = supabase.table("dang_ky_nghi")\
-                                .select("ngay_nghi, ho_ten, trang_thai, ly_do, id")\
+                                .select("ngay_nghi, ho_ten, trang_thai, ly_do")\
                                 .neq("trang_thai", "Chờ duyệt")\
-                                .order("id", desc=False)\
+                                .order("created_at", desc=True)\
                                 .limit(5).execute()
 
                             if recent_res.data:
@@ -1319,13 +1335,11 @@ if menu == "🕒 Chấm công đi làm":
                                         st.markdown(f"**{item['ho_ten']}** - 📅 {d_str}")
                                         st.markdown(f"Trạng thái: <span style='color:{status_color}; font-weight:bold;'>{item['trang_thai']}</span>", unsafe_allow_html=True)
                             else:
-                                st.caption("Chưa có đơn nào được xử lý hôm nay.")
-                else:
-                    # Trường hợp không có đơn nào chờ duyệt, vẫn hiển thị lịch sử xử lý gần đây
-                    st.info("🎉 Hiện tại không có đơn nào cần xử lý.")
-                    st.markdown("---")
-                    st.markdown("#### ✅ Lịch sử phê duyệt gần đây")
-                    display_general_history(supabase) # Đảm bảo hàm này đã được định nghĩa ở phía trên
+                                st.caption("Chưa có đơn nào được xử lý gần đây.")               
+                        
+                        # Hiển thị lịch sử tổng hợp (Nếu có hàm này)
+                        if 'display_general_history' in globals():
+                            display_general_history(supabase)
 
             
     # =========================================================

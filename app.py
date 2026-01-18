@@ -194,6 +194,10 @@ def format_vietnam_time(df):
         df['created_at'] = df['created_at'].dt.strftime('%d/%m/%Y %H:%M')
         
     return df
+@st.cache_data(ttl=300)
+def load_data():
+    res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
+    return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
 
 #========================
 #SECTION 7. LOGIN UI
@@ -1165,7 +1169,8 @@ if menu == "🕒 Chấm công đi làm":
 
                 # Khởi tạo layout cột trước để luôn hiển thị khung giao diện
                 if res.data:
-                    df_raw = pd.DataFrame(res.data)
+                    df_raw = load_data()
+
                     df_raw['ngay_nghi'] = pd.to_datetime(df_raw['ngay_nghi'])
                     
                     # --- LOGIC GOM NHÓM TỐI ƯU ---
@@ -1649,8 +1654,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             # Kiểm tra nếu có dữ liệu trả về thành công
             if res and res.data:
                 # Tạo df_raw để xử lý trung gian
-                df_raw = pd.DataFrame(res.data)
-                
+                df_raw = load_data()
                 # 2. Xử lý lấy 'ho_ten' an toàn từ bảng quan_tri_vien
                 if 'quan_tri_vien' in df_raw.columns:
                     df_raw['Tên'] = df_raw['quan_tri_vien'].apply(lambda x: x['ho_ten'] if isinstance(x, dict) else "N/A")
@@ -1771,6 +1775,10 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             
                             # 2. TRÍCH XUẤT DỮ LIỆU SAU LỌC
                             df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
+                        # --- 2. Hàm xử lý logic chuyển trang (Callback) ---
+                            def handle_page_change(delta):
+                                st.session_state.current_page += delta
+
 
                             if df_display.empty:
                                 st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
@@ -1810,7 +1818,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     }
 
                                     .stat-value {
-                                        color: #ffffff;
+                                        color: #dc2626;
                                         font-size: 2rem;
                                         font-weight: 800;
                                         line-height: 1;
@@ -1899,6 +1907,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 df_final = df_view[final_cols]
 
                                 # --- 🚀 LOGIC PHÂN TRANG (PAGINATION) ---
+                                
                                 items_per_page = 10
                                 total_rows = len(df_final)
                                 total_pages = (total_rows // items_per_page) + (1 if total_rows % items_per_page > 0 else 0)
@@ -1957,44 +1966,57 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     # Nếu không phải admin, hiển thị bảng xem thông thường
                                     st.dataframe(df_page, use_container_width=True, hide_index=True)
                                 # --- BỘ CHUYỂN TRANG ---
-                            
+                                st.markdown("""
+                                    <style>
+                                    /* Ép các cột phân trang luôn nằm ngang trên điện thoại */
+                                    [data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+                                        width: 33.33% !important;
+                                        flex: 1 1 33.33% !important;
+                                        min-width: 33.33% !important;
+                                    }
+                                    .page-info {
+                                        text-align: center; 
+                                        line-height: 40px; 
+                                        font-weight: bold; 
+                                        font-size: 14px;
+                                    }
+                                    </style>
+                                """, unsafe_allow_html=True)
+                                
+
+                                # --- 3. Logic hiển thị phân trang ---
+                                # Giả sử bạn đã tính được total_pages từ dữ liệu đã lấy
                                 if total_pages > 1:
-                                    st.write("") 
+                                    st.write("---") # Đường kẻ phân cách nhẹ
                                     
-                                    # CSS để ép các cột không bị nhảy dòng trên điện thoại
-                                    st.markdown("""
-                                        <style>
-                                        [data-testid="column"] {
-                                            width: calc(33.3333% - 1rem) !important;
-                                            flex: 1 1 calc(33.3333% - 1rem) !important;
-                                            min-width: calc(33.3333% - 1rem) !important;
-                                        }
-                                        </style>
-                                        """, unsafe_allow_html=True)
-
-                                    # Sử dụng gap="extra_small" để tiết kiệm diện tích tối đa
-                                    page_col1, page_col2, page_col3 = st.columns([1, 1, 1], gap="small")
+                                    # Tạo 3 cột bằng nhau
+                                    p_col1, p_col2, p_col3 = st.columns(3, gap="small")
                                     
-                                    with page_col1:
-                                        if st.button("⬅️ Trước", use_container_width=True, disabled=(st.session_state.current_page == 1)):
-                                            st.session_state.current_page -= 1
-                                            st.rerun()
+                                    with p_col1:
+                                        st.button(
+                                            "⬅️ Trước", 
+                                            on_click=handle_page_change, 
+                                            args=(-1,), 
+                                            disabled=(st.session_state.current_page <= 1),
+                                            use_container_width=True,
+                                            key="prev_btn"
+                                        )
 
-                                    with page_col2:
-                                        # Căn chỉnh số trang nằm giữa và ngang hàng với nút
+                                    with p_col2:
                                         st.markdown(
-                                            f"""
-                                            <div style='text-align: center; line-height: 40px; font-weight: bold; font-size: 14px; white-space: nowrap;'>
-                                                {st.session_state.current_page} / {total_pages}
-                                            </div>
-                                            """, 
+                                            f"<div class='page-info'>{st.session_state.current_page} / {total_pages}</div>", 
                                             unsafe_allow_html=True
                                         )
                                     
-                                    with page_col3:
-                                        if st.button("Sau ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages)):
-                                            st.session_state.current_page += 1
-                                            st.rerun()
+                                    with p_col3:
+                                        st.button(
+                                            "Sau ➡️", 
+                                            on_click=handle_page_change, 
+                                            args=(1,), 
+                                            disabled=(st.session_state.current_page >= total_pages),
+                                            use_container_width=True,
+                                            key="next_btn"
+                                        )
 
                                 # --- XỬ LÝ XUẤT FILE EXCEL ---
                                 out = io.BytesIO()
@@ -2006,8 +2028,13 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                 # Xử lý các cột số lượng
                                 df_export['Máy'] = df_export['combo'].fillna(0).astype(int) if 'combo' in df_export.columns else 0
-                                df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "") if 'Km' in df_export.columns else ""
+                                def fmt_km(x):
+                                    try:
+                                        return f"{int(float(x))} Km" if pd.notna(x) and float(x) > 0 else ""
+                                    except:
+                                        return ""
 
+                                df_export['Km_Số'] = df_export['Km'].apply(fmt_km)
                                 # Chuẩn bị Sheet chính
                                 df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Thành tiền', 'Lý do', 'Trạng thái']]
                                 df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Thành tiền', 'Ghi chú duyệt', 'Tình trạng']
@@ -2108,17 +2135,18 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                     ws.set_column(summary_start_col, summary_start_col, 25)
                                     ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
-
                                 # NÚT TẢI EXCEL
                                 with c_exp:
                                     # Căn chỉnh nút Export cho cân đối với chiều cao của các thẻ Metric
-                                    st.write("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)                                  # Code xuất Excel của bạn giữ nguyên
+                                    st.write("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)                                  
                                     st.download_button(
+                                        
                                         label="📥 Tải Excel Báo Cáo", 
                                         data=out.getvalue(), 
                                         file_name=f"Bao_Cao_{current_user}.xlsx", 
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         use_container_width=True
+                                        
                                     )
             else:
                 st.info("📭 Chưa có dữ liệu đơn nào trong hệ thống.")

@@ -8,3 +8,4 @@ streamlit-local-storage
 supabase
 xlsxwriter
 altair==4.2.2
+streamlit==1.31.0

@@ -37,7 +37,23 @@ def get_supabase() -> Client:
 supabase = get_supabase()
 @st.cache_data(ttl=300)
 def load_data(reset_trigger=0):
-    res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
+    six_months_ago = (datetime.now() - timedelta(days=180)).isoformat()
+
+    res = supabase.table("cham_cong") \
+        .select("""
+            id,
+            thoi_gian,
+            so_hoa_don,
+            noi_dung,
+            quang_duong,
+            thanh_tien,
+            trang_thai,
+            ghi_chu_duyet,
+            username,
+            quan_tri_vien(ho_ten)
+        """) \
+        .gte("thoi_gian", six_months_ago) \
+        .execute()
     return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
 @st.cache_data(ttl=300)
 def load_data_nghi(reset_trigger):
@@ -1690,9 +1706,7 @@ if role in ["Admin", "System Admin", "Manager", "User"]:
         
         try:
             # 1. Truy vấn dữ liệu từ Supabase
-            res = supabase.table("cham_cong") \
-                .select("*, quan_tri_vien(ho_ten)") \
-                .execute()
+            data = get_pending_requests(current_r, user_hien_tai)
             
             # Kiểm tra nếu có dữ liệu trả về thành công
             if res and res.data:
@@ -2001,6 +2015,7 @@ if role in ["Admin", "System Admin", "Manager", "User"]:
                                             supabase.table("cham_cong").delete().in_("so_hoa_don", list_so_hd).execute()                                                
                                             
                                             st.cache_data.clear() # Xóa cache để dữ liệu bảng cập nhật ngay
+                                            st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                                             st.session_state.toast_message = "✅ Đã xóa các đơn được chọn thành công!"
                                             st.rerun()
                                         except Exception as e:
@@ -2323,7 +2338,12 @@ if role in ["Admin", "System Admin", "Manager", "User"]:
                 st.warning("⚠️ **Lưu ý:** Thao tác này đưa đơn về trạng thái 'Chờ duyệt'.")
                 
                 # Đảm bảo df_all tồn tại và không rỗng
-                df_undo = df_all[df_all["Trạng thái"] == "Đã duyệt"].copy()
+                if "Trạng thái" in df_all.columns:
+                    df_undo = df_all[df_all["Trạng thái"] == "Đã duyệt"].copy()
+                else:
+                    st.error(f"Thiếu cột 'Trạng thái'. Các cột hiện có: {list(df_all.columns)}")
+                    df_undo = pd.DataFrame()
+
                 
                 if df_undo.empty:
                     st.info("ℹ️ Không có đơn nào 'Đã duyệt' để đảo ngược.")
@@ -2333,7 +2353,11 @@ if role in ["Admin", "System Admin", "Manager", "User"]:
                     sel_undo = st.selectbox("⏪ Chọn Số HĐ:", list_hd, key="undo_select_box_unique")
                     
                     # Lấy dòng dữ liệu được chọn
-                    row_undo_data = df_undo[df_undo["Số HĐ"].astype(str) == sel_undo].iloc[0]
+                    tmp = df_undo[df_undo["Số HĐ"].astype(str) == sel_undo]
+                    if tmp.empty:
+                        st.error("Không tìm thấy đơn.")
+                        st.stop()
+                    row_undo_data = tmp.iloc[0]
                     
                     # SỬA LỖI TẠI ĐÂY: Không ép kiểu int thủ công nếu không chắc chắn
                     row_id_undo = row_undo_data["id"] 
@@ -2706,7 +2730,7 @@ elif menu == "⚙️ Quản trị hệ thống":
                     with c1:
                         st.markdown("##### 📥 Xuất dữ liệu")
                         # Lấy dữ liệu từ Supabase thay vì đọc file
-                        data_response = supabase.table("cham_cong").select("*").execute()
+                        data_response = load_data(st.session_state.get('reset_trigger', 0))
                         if data_response.data:
                             df = pd.DataFrame(data_response.data)
                             # Chuyển DataFrame thành dữ liệu Excel (dùng BytesIO)

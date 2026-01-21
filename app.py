@@ -1563,80 +1563,80 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             return False
 
 # --- GIAO DIỆN TAB Chấm công---
-with tabs[0]:
-    user = st.session_state.get("username")
-    role = st.session_state.get("role")
-    
-    # Sử dụng hàm cache
-    raw_nv = get_employee_list(role)
-    df_nv = pd.DataFrame(raw_nv)
-    
-    target_user = user
-    if not df_nv.empty and role in ["Manager", "Admin", "System Admin"]:
-        df_nv['display'] = df_nv['ho_ten'] + " (" + df_nv['username'] + ")"
+    with tabs[0]:
+        user = st.session_state.get("username")
+        role = st.session_state.get("role")
         
-        # UI chọn nhân viên
-        if role in ["Admin", "System Admin"]:
-            sel = st.selectbox("🎯 Chấm công cho:", df_nv['display'])
-            target_user = df_nv.loc[df_nv['display'] == sel, 'username'].values[0]
-        else:
-            sel = st.selectbox("🎯 Chấm công thay cho:", ["Tự chấm công"] + df_nv['display'].tolist())
-            if sel != "Tự chấm công":
+        # Sử dụng hàm cache
+        raw_nv = get_employee_list(role)
+        df_nv = pd.DataFrame(raw_nv)
+        
+        target_user = user
+        if not df_nv.empty and role in ["Manager", "Admin", "System Admin"]:
+            df_nv['display'] = df_nv['ho_ten'] + " (" + df_nv['username'] + ")"
+            
+            # UI chọn nhân viên
+            if role in ["Admin", "System Admin"]:
+                sel = st.selectbox("🎯 Chấm công cho:", df_nv['display'])
                 target_user = df_nv.loc[df_nv['display'] == sel, 'username'].values[0]
-
-    # Form nhập liệu
-    if "f_up_key" not in st.session_state: st.session_state["f_up_key"] = 0
-    uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn *", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
-
-    with st.form("form_lap_dat", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        so_hd_in = c1.text_input("📝 Số hóa đơn *")
-        quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0)
-        
-        m1, m2 = st.columns(2)
-        c_lon = m1.number_input("🤖 Máy lớn", min_value=0)
-        c_nho = m2.number_input("📦 Máy nhỏ/Vật tư", min_value=0)
-        
-        noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *").title().strip()
-        
-        submit = st.form_submit_button("🚀 GỬI YÊU CẦU", use_container_width=True)
-        
-        if submit:
-            if not uploaded_file or not so_hd_in or not noi_dung:
-                st.error("❌ Thiếu thông tin bắt buộc!")
-            elif c_lon == 0 and c_nho == 0:
-                st.error("❌ Nhập ít nhất 1 loại máy!")
             else:
-                # Xử lý dữ liệu
-                so_hd = so_hd_in.strip().upper()
-                final_hd = so_hd if so_hd.startswith("HD") else f"HD{so_hd}"
-                tong_tien = calculate_total_amount(quang_duong, c_lon, c_nho)
-                
-                try:
-                    # Chuyển ảnh (Vẫn giữ Base64 theo yêu cầu cũ nhưng nên cân nhắc Storage)
-                    img_base64 = base64.b64encode(uploaded_file.read()).decode()
+                sel = st.selectbox("🎯 Chấm công thay cho:", ["Tự chấm công"] + df_nv['display'].tolist())
+                if sel != "Tự chấm công":
+                    target_user = df_nv.loc[df_nv['display'] == sel, 'username'].values[0]
+
+        # Form nhập liệu
+        if "f_up_key" not in st.session_state: st.session_state["f_up_key"] = 0
+        uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn *", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
+
+        with st.form("form_lap_dat", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            so_hd_in = c1.text_input("📝 Số hóa đơn *")
+            quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0)
+            
+            m1, m2 = st.columns(2)
+            c_lon = m1.number_input("🤖 Máy lớn", min_value=0)
+            c_nho = m2.number_input("📦 Máy nhỏ/Vật tư", min_value=0)
+            
+            noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *").title().strip()
+            
+            submit = st.form_submit_button("🚀 GỬI YÊU CẦU", use_container_width=True)
+            
+            if submit:
+                if not uploaded_file or not so_hd_in or not noi_dung:
+                    st.error("❌ Thiếu thông tin bắt buộc!")
+                elif c_lon == 0 and c_nho == 0:
+                    st.error("❌ Nhập ít nhất 1 loại máy!")
+                else:
+                    # Xử lý dữ liệu
+                    so_hd = so_hd_in.strip().upper()
+                    final_hd = so_hd if so_hd.startswith("HD") else f"HD{so_hd}"
+                    tong_tien = calculate_total_amount(quang_duong, c_lon, c_nho)
                     
-                    payload = {
-                        "username": target_user,
-                        "thoi_gian": datetime.now().isoformat(),
-                        "so_hoa_don": final_hd,
-                        "noi_dung": f"{noi_dung} | (L:{c_lon}, N:{c_nho})",
-                        "quang_duong": quang_duong,
-                        "combo": c_lon + c_nho,
-                        "thanh_tien": tong_tien,
-                        "hinh_anh": img_base64,
-                        "trang_thai": 'Chờ duyệt'
-                    }
-                    
-                    res = supabase.table("cham_cong").insert(payload).execute()
-                    if res.data:
-                        st.success("✅ Đã gửi đơn thành công!")
-                        st.session_state["f_up_key"] += 1
-                        st.cache_data.clear() # Quan trọng: Xóa cache tab danh sách để hiện đơn mới ngay
-                        st.rerun()
-                except Exception as e:
-                    if "duplicate" in str(e): st.error(f"❌ Số HĐ {final_hd} đã tồn tại!")
-                    else: st.error(f"❌ Lỗi: {e}")
+                    try:
+                        # Chuyển ảnh (Vẫn giữ Base64 theo yêu cầu cũ nhưng nên cân nhắc Storage)
+                        img_base64 = base64.b64encode(uploaded_file.read()).decode()
+                        
+                        payload = {
+                            "username": target_user,
+                            "thoi_gian": datetime.now().isoformat(),
+                            "so_hoa_don": final_hd,
+                            "noi_dung": f"{noi_dung} | (L:{c_lon}, N:{c_nho})",
+                            "quang_duong": quang_duong,
+                            "combo": c_lon + c_nho,
+                            "thanh_tien": tong_tien,
+                            "hinh_anh": img_base64,
+                            "trang_thai": 'Chờ duyệt'
+                        }
+                        
+                        res = supabase.table("cham_cong").insert(payload).execute()
+                        if res.data:
+                            st.success("✅ Đã gửi đơn thành công!")
+                            st.session_state["f_up_key"] += 1
+                            st.cache_data.clear() # Quan trọng: Xóa cache tab danh sách để hiện đơn mới ngay
+                            st.rerun()
+                    except Exception as e:
+                        if "duplicate" in str(e): st.error(f"❌ Số HĐ {final_hd} đã tồn tại!")
+                        else: st.error(f"❌ Lỗi: {e}")
 # --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/SYSTEM ADMIN/MANAGER) ---
 if role in ["Admin", "System Admin", "Manager", "User"]:
     with tabs[1]:

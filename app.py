@@ -35,7 +35,40 @@ def get_supabase() -> Client:
         st.secrets["SUPABASE_KEY"]
     )
 supabase = get_supabase()
-
+@st.cache_data(ttl=300)
+def load_data(reset_trigger=0):
+    res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
+    return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
+@st.cache_data(ttl=300)
+def load_data_nghi(reset_trigger):
+    try:
+        # 1. Cải tiến Select: Lấy thêm quan_tri_vien(ho_ten) để có cột 'Tên'
+        res = supabase.table("dang_ky_nghi")\
+            .select("*, quan_tri_vien(ho_ten)")\
+            .order("ngay_nghi", desc=True)\
+            .execute()
+        
+        if res and res.data:
+            df = pd.DataFrame(res.data)
+            
+            # 2. Chuyển đổi ngày tháng an toàn (Thêm errors='coerce')
+            if 'ngay_nghi' in df.columns:
+                df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi'], errors='coerce')
+            
+            # 3. Lấy tên nhân viên từ bảng liên kết
+            if 'quan_tri_vien' in df.columns:
+                # Nếu quan_tri_vien là dict (do dùng select liên kết), lấy ho_ten
+                df['Tên'] = df['quan_tri_vien'].apply(lambda x: x.get('ho_ten') if isinstance(x, dict) else "N/A")
+            else:
+                # Phòng trường hợp không join được bảng
+                df['Tên'] = "N/A"
+                
+            return df
+            
+    except Exception as e:
+        st.error(f"Lỗi tải dữ liệu nghỉ: {e}")
+        
+    return pd.DataFrame()
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 def register_user(username, password):
@@ -65,7 +98,6 @@ def display_logo(logo_path="LOGO.png"):
             """,
             unsafe_allow_html=True
         )
-
 #========================
 #SECTION 3. COOKIE MANAGER & AUTH CONSTANT
 #========================
@@ -110,6 +142,8 @@ def check_login_supabase(u, p):
                     .update({"password": input_hash})\
                     .eq("username", u_lower)\
                     .execute()
+                st.cache_data.clear()
+                st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                 st.write(f"Đã tự động hash mật khẩu cho user {u_lower}")
             except Exception as e:
                 st.error(f"Lỗi cập nhật password: {e}")
@@ -194,40 +228,24 @@ def format_vietnam_time(df):
         df['created_at'] = df['created_at'].dt.strftime('%d/%m/%Y %H:%M')
         
     return df
-@st.cache_data(ttl=300)
-def load_data():
-    res = supabase.table("cham_cong").select("*, quan_tri_vien(ho_ten)").execute()
-    return pd.DataFrame(res.data) if res and res.data else pd.DataFrame()
-@st.cache_data(ttl=300)
-def load_data_nghi(reset_trigger):
+
+#Hàm chấm công hàng ngày
+@st.cache_data(ttl=600)  # Lưu cache trong 10 phút
+def get_today_attendance(username, today_str):
+    """
+    Hàm kiểm tra trạng thái chấm công của nhân viên trong ngày hôm nay.
+    """
     try:
-        # 1. Cải tiến Select: Lấy thêm quan_tri_vien(ho_ten) để có cột 'Tên'
-        res = supabase.table("dang_ky_nghi")\
-            .select("*, quan_tri_vien(ho_ten)")\
-            .order("ngay_nghi", desc=True)\
+        res = supabase.table("cham_cong_di_lam") \
+            .select("trang_thai_lam") \
+            .eq("username", username) \
+            .gte("thoi_gian", f"{today_str} 00:00:00") \
+            .lte("thoi_gian", f"{today_str} 23:59:59") \
             .execute()
         
-        if res and res.data:
-            df = pd.DataFrame(res.data)
-            
-            # 2. Chuyển đổi ngày tháng an toàn (Thêm errors='coerce')
-            if 'ngay_nghi' in df.columns:
-                df['ngay_nghi'] = pd.to_datetime(df['ngay_nghi'], errors='coerce')
-            
-            # 3. Lấy tên nhân viên từ bảng liên kết
-            if 'quan_tri_vien' in df.columns:
-                # Nếu quan_tri_vien là dict (do dùng select liên kết), lấy ho_ten
-                df['Tên'] = df['quan_tri_vien'].apply(lambda x: x.get('ho_ten') if isinstance(x, dict) else "N/A")
-            else:
-                # Phòng trường hợp không join được bảng
-                df['Tên'] = "N/A"
-                
-            return df
-            
-    except Exception as e:
-        st.error(f"Lỗi tải dữ liệu nghỉ: {e}")
-        
-    return pd.DataFrame()
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 #========================
 #SECTION 7. LOGIN UI
 #========================
@@ -413,7 +431,9 @@ def get_attendance_report(target_username, filter_month=None):
     local_tz = pytz.timezone('Asia/Ho_Chi_Minh')
     
     # Chuyển đổi thoi_gian và đảm bảo có múi giờ
-    df['thoi_gian'] = pd.to_datetime(df['thoi_gian'])
+    if 'thoi_gian' in df.columns:
+        df['thoi_gian'] = pd.to_datetime(df['thoi_gian'], errors="coerce")
+
     
     # Ép thoi_gian về múi giờ Việt Nam nếu dữ liệu thô từ DB là UTC
     def localize_time(dt):
@@ -499,6 +519,95 @@ def get_attendance_report_cached(current_user, month=None):
     """Sử dụng current_user làm key để cache không bị trộn lẫn giữa các tài khoản"""
     return get_attendance_report(current_user, month)
 
+#Hàm lấy dữ liệu lich sử
+def get_grouped_history(data_list):
+    if not data_list: return []
+    df_h = pd.DataFrame(data_list)
+    df_h['ngay_nghi'] = pd.to_datetime(df_h['ngay_nghi'])
+    results = []
+    for (name, status, reason), group in df_h.groupby(['ho_ten', 'trang_thai', 'ly_do'], sort=False):
+        group = group.sort_values('ngay_nghi')
+        day_diff = group['ngay_nghi'].diff().dt.days != 1
+        g_ids = day_diff.cumsum()
+        for _, g in group.groupby(g_ids):
+            s_d = g['ngay_nghi'].min().strftime('%d/%m')
+            e_d = g['ngay_nghi'].max().strftime('%d/%m')
+            results.append({
+                "ho_ten": name, 
+                "trang_thai": status, 
+                "ly_do": reason,
+                "range": f"{s_d}" if s_d == e_d else f"{s_d} → {e_d}",
+                "count": len(g)
+            })
+    return results 
+# 1. Tách hàm truy vấn và dùng Cache để tăng tốc
+@st.cache_data(ttl=600)  # Lưu cache 10 phút
+def get_pending_requests(role, username):
+    try:
+        query = supabase.table("cham_cong") \
+            .select("id, so_hoa_don, thoi_gian, noi_dung, quang_duong, combo, thanh_tien, trang_thai, hinh_anh, quan_tri_vien(ho_ten)") \
+            .eq("trang_thai", "Chờ duyệt")
+        
+        if role not in ["Admin", "System Admin", "Manager"]:
+            query = query.eq("username", username)
+            
+        res = query.order("thoi_gian", desc=True).execute()
+        return res.data
+    except Exception as e:
+        st.error(f"❌ Lỗi kết nối Cloud: {e}")
+        return []
+
+# 2. Hàm format thời gian (tách riêng để gọn code giao diện)
+def format_vn_time(time_str):
+    try:
+        dt = pd.to_datetime(time_str)
+        if dt.tz is None:
+            dt = dt.tz_localize('UTC')
+        return dt.tz_convert('Asia/Ho_Chi_Minh').strftime('%d/%m/%Y %H:%M')
+    except:
+        return time_str
+# --- 1. TỐI ƯU TRUY VẤN CÓ CACHE ---
+@st.cache_data(ttl=600)
+def get_employee_list(role):
+    try:
+        if role in ["System Admin", "Admin"]:
+            res = supabase.table("quan_tri_vien").select("username, ho_ten").in_("role", ["Manager", "User"]).execute()
+        else: # Manager
+            res = supabase.table("quan_tri_vien").select("username, ho_ten").eq("role", "User").execute()
+        return res.data
+    except Exception as e:
+        st.error(f"Lỗi tải danh sách: {e}")
+        return []
+
+# --- 2. TỐI ƯU LOGIC TÍNH TIỀN ---
+def calculate_total_amount(quang_duong, combo_lon, combo_nho):
+    # Tính đơn giá km
+    if quang_duong < 20: don_gia = 30000
+    elif quang_duong <= 30: don_gia = 50000
+    elif quang_duong <= 40: don_gia = 70000
+    elif quang_duong <= 50: don_gia = 80000
+    else: don_gia = 80000 + (quang_duong - 50) * 5000
+    
+    total = (combo_lon * 200000) + (combo_nho * don_gia)
+    return total  
+@st.cache_data(ttl=600)
+#Cập nhật cho phần báo cáo chấm công lắp dđặt
+def load_data_report(reset_trigger, role, username):
+    try:
+        # Chỉ lấy các cột cần thiết, bỏ hinh_anh để nhẹ truy vấn [cite: 3]
+        query = supabase.table("cham_cong").select(
+            "id, thoi_gian, so_hoa_don, noi_dung, quang_duong, combo, thanh_tien, trang_thai, ghi_chu_duyet, username, quan_tri_vien(ho_ten)"
+        )
+        
+        # Phân quyền Server-side: User chỉ lấy đơn của họ 
+        if role not in ["Admin", "System Admin", "Manager"]:
+            query = query.eq("username", username)
+            
+        res = query.order("thoi_gian", desc=True).execute() # Mới nhất lên đầu
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"Lỗi tải dữ liệu: {e}")
+        return pd.DataFrame() 
 # PHÂN HỆ 1: CHẤM CÔNG ĐI LÀM (ĐÃ TỐI ƯU CHO COOKIES)
 # ==============================================================================
 if menu == "🕒 Chấm công đi làm":
@@ -522,127 +631,103 @@ if menu == "🕒 Chấm công đi làm":
     # TAB 1 – NHÂN VIÊN (CHẤM CÔNG)
     # =========================================================
     with tabs[0]:
-
         if role == "System Admin":
             st.info("💡 Sếp trả lương cho nhân viên là công đức vô lượng rồi, không cần chấm công.")
         else:
             st.markdown(f"##### ⏰ Chấm công: {ho_ten}")
-                
-            # Sử dụng múi giờ Việt Nam
+            
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
-            current_month = now.strftime("%Y-%m") 
             display_month = now.strftime("%m/%Y")
 
-            try:
-                # 1. Kiểm tra trạng thái hôm nay trên Supabase thay cho SQLite
-                # Sử dụng gte (lớn hơn hoặc bằng) và lt (nhỏ hơn) để lọc chính xác ngày hôm nay
-                res = supabase.table("cham_cong_di_lam") \
-                    .select("trang_thai_lam") \
-                    .eq("username", user) \
-                    .gte("thoi_gian", f"{today_str} 00:00:00") \
-                    .lte("thoi_gian", f"{today_str} 23:59:59") \
-                    .execute()
-                
-                df_today = pd.DataFrame(res.data)
-                
-                has_in = False
-                has_out = False
-                has_off = False
+            # --- GỌI HÀM CACHE ĐỂ LẤY TRẠNG THÁI ---
+            # Chúng ta truyền thêm 1 biến 'reset_trigger' nếu cần làm mới thủ công
+            df_today = get_today_attendance(user, today_str)
+            
+            has_in = any(df_today['trang_thai_lam'] == "Vào làm") if not df_today.empty else False
+            has_out = any(df_today['trang_thai_lam'] == "Ra về") if not df_today.empty else False
+            has_off = any(df_today['trang_thai_lam'].str.contains("Nghỉ", na=False)) if not df_today.empty else False
 
-                if not df_today.empty:
-                    has_in = any(df_today['trang_thai_lam'] == "Vào làm")
-                    has_out = any(df_today['trang_thai_lam'] == "Ra về")
-                    has_off = any(df_today['trang_thai_lam'].str.contains("Nghỉ", na=False))
+            c_left, c_right = st.columns([1, 2.2])
+            
+            with c_left:
+                col_in, col_out = st.columns(2)
 
-                c_left, c_right = st.columns([1, 2.2])
-                with c_left:
-                    col_in, col_out = st.columns(2)
-
-                    # --- NÚT VÀO LÀM ---
-                    if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", 
-                                    disabled=(has_in or has_off), key="btn_in"):                       
-                        try:
-                            data_in = {
-                                "username": user,
-                                "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
-                                "trang_thai_lam": "Vào làm",
-                                "nguoi_thao_tac": user
-                            }
-                            supabase.table("cham_cong_di_lam").insert(data_in).execute()
-                            st.session_state.toast_message = "✅ Đã ghi nhận giờ vào"
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Lỗi: {e}")
-
-                    # --- NÚT RA VỀ ---
-                    if col_out.button("🏁 RA VỀ", use_container_width=True, 
-                                    disabled=(not has_in or has_out or has_off), key="btn_out"):
-                        try:
-                            data_out = {
-                                "username": user,
-                                "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
-                                "trang_thai_lam": "Ra về",
-                                "nguoi_thao_tac": user
-                            }
-                            supabase.table("cham_cong_di_lam").insert(data_out).execute()
-                            st.session_state.toast_message = "🏁 Đã ghi nhận giờ ra"
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Lỗi: {e}")
-
-                    # --- ĐĂNG KÝ NGHỈ ---
-                    with st.expander("🛌 Đăng ký nghỉ hôm nay", expanded=False):
-                        if has_off: 
-                            st.warning("Bạn đã đăng ký nghỉ hôm nay")
-                        elif has_in: 
-                            st.error("Đã chấm công vào làm, không thể đăng ký nghỉ")
-                        else:
-                            type_off = st.selectbox("Loại nghỉ", ["Có phép", "Không phép"])
-                            reason_off = st.text_input("Lý do nghỉ", placeholder="Nhập lý do...")
-                            
-                            if st.button("Xác nhận nghỉ", use_container_width=True):
-                                if not reason_off: 
-                                    st.error("Vui lòng nhập lý do")
-                                else:
-                                    try:
-                                        data_off = {
-                                            "username": user,
-                                            "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
-                                            "trang_thai_lam": f"Nghỉ {type_off}",
-                                            "ghi_chu": reason_off,
-                                            "nguoi_thao_tac": user
-                                        }
-                                        supabase.table("cham_cong_di_lam").insert(data_off).execute()
-                                        st.session_state.toast_message = "Đã gửi đăng ký nghỉ"
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Lỗi: {e}")
-
-                    show_detail = st.button("📊 Chi tiết chấm công cá nhân", use_container_width=True)
-
-                with c_right:
-                    # Truyền USERNAME từ session vào hàm cache (hàm này bạn đã chuyển sang Supabase ở bước trước)
-                    df_quick = get_attendance_report_cached(user)
-                    if not df_quick.empty:
-                        st.caption("Ngày làm việc gần nhất")
-                        st.dataframe(df_quick.head(3), use_container_width=True, hide_index=True)
-
-                if show_detail:
-                    @st.dialog("Bảng chi tiết chấm công cá nhân", width="large")
-                    def show_month_detail_dialog():
-                        st.subheader(f"📅 Tháng {display_month}")
-                        # Dùng hàm report lấy theo user từ session (Đã chuyển sang dùng Supabase)
-                        df_detail = get_attendance_report_cached(user, current_month)
+                # --- NÚT VÀO LÀM ---
+                if col_in.button("📍 VÀO LÀM", use_container_width=True, type="primary", 
+                                disabled=(has_in or has_off), key="btn_in"):                       
+                    try:
+                        data_in = {
+                            "username": user,
+                            "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
+                            "trang_thai_lam": "Vào làm",
+                            "nguoi_thao_tac": user
+                        }
+                        supabase.table("cham_cong_di_lam").insert(data_in).execute()
                         
-                        if not df_detail.empty:
-                            st.dataframe(df_detail, use_container_width=True, hide_index=True)
-                        else: 
-                            st.write("Chưa có dữ liệu trong tháng này.")
-                    show_month_detail_dialog()
-                    
-            except Exception as e:
-                st.error(f"Lỗi hệ thống khi tải dữ liệu chấm công: {e}")
+                        # QUAN TRỌNG: Xóa cache để lần chạy sau load lại dữ liệu mới nhất
+                        st.cache_data.clear() 
+                        st.session_state.toast_message = "✅ Đã ghi nhận giờ vào"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Lỗi: {e}")
+
+                # --- NÚT RA VỀ ---
+                if col_out.button("🏁 RA VỀ", use_container_width=True, 
+                                disabled=(not has_in or has_out or has_off), key="btn_out"):
+                    try:
+                        data_out = {
+                            "username": user,
+                            "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
+                            "trang_thai_lam": "Ra về",
+                            "nguoi_thao_tac": user
+                        }
+                        supabase.table("cham_cong_di_lam").insert(data_out).execute()
+                        
+                        st.cache_data.clear() # Xóa cache
+                        st.session_state.toast_message = "🏁 Đã ghi nhận giờ ra"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Lỗi: {e}")
+
+                # --- ĐĂNG KÝ NGHỈ ---
+                with st.expander("🛌 Đăng ký nghỉ hôm nay", expanded=False):
+                    if has_off: 
+                        st.warning("Bạn đã đăng ký nghỉ hôm nay")
+                    elif has_in: 
+                        st.error("Đã chấm công vào làm, không thể đăng ký nghỉ")
+                    else:
+                        type_off = st.selectbox("Loại nghỉ", ["Có phép", "Không phép"])
+                        reason_off = st.text_input("Lý do nghỉ", placeholder="Nhập lý do...")
+                        
+                        if st.button("Xác nhận nghỉ", use_container_width=True):
+                            if not reason_off: 
+                                st.error("Vui lòng nhập lý do")
+                            else:
+                                try:
+                                    data_off = {
+                                        "username": user,
+                                        "thoi_gian": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                        "trang_thai_lam": f"Nghỉ {type_off}",
+                                        "ghi_chu": reason_off,
+                                        "nguoi_thao_tac": user
+                                    }
+                                    supabase.table("cham_cong_di_lam").insert(data_off).execute()
+                                    
+                                    st.cache_data.clear() # Xóa cache
+                                    st.session_state.toast_message = "Đã gửi đăng ký nghỉ"
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Lỗi: {e}")
+
+                show_detail = st.button("📊 Chi tiết chấm công cá nhân", use_container_width=True)
+
+            with c_right:
+                # Sử dụng lại hàm cache báo cáo bạn đã có
+                df_quick = get_attendance_report_cached(user)
+                if not df_quick.empty:
+                    st.caption("Ngày làm việc gần nhất")
+                    st.dataframe(df_quick.head(3), use_container_width=True, hide_index=True)
             
 
     # =========================================================
@@ -1189,36 +1274,25 @@ if menu == "🕒 Chấm công đi làm":
                                 st.caption(f"Trạng thái: {item['trang_thai']} | Lý do: {item['ly_do']}")
             else:
                 st.info("Chưa có dữ liệu lịch sử hệ thống.")
-        # 3. KHU VỰC SYSTEM ADMIN – PHÊ DUYỆT + LỊCH SỬ
         if role == "System Admin":
-            # --- PHẦN 3: PHÊ DUYỆT & QUẢN LÝ (LUÔN HIỂN THỊ) ---
+            # --- PHẦN 3: PHÊ DUYỆT & QUẢN LÝ ---
             with st.expander("🛠️ Phê duyệt & Quản lý đơn nghỉ", expanded=True):
-                # 1. Tải dữ liệu thông qua hàm Cache (đảm bảo hàm load_data_nghi đã có @st.cache_data)
-                # reset_trigger giúp làm mới dữ liệu khi có thay đổi
+                # 1. Tải dữ liệu và xử lý
                 df_raw = load_data_nghi(st.session_state.get('reset_trigger', 0))
-
-                # Khởi tạo các biến chứa dữ liệu để tránh lỗi NameError
                 grouped_data = []
                 df_display = pd.DataFrame()
 
-                # Kiểm tra nếu có dữ liệu gốc
+                # --- XỬ LÝ DỮ LIỆU (NẾU CÓ) ---
                 if not df_raw.empty:
-                    # Lọc chỉ lấy các đơn đang ở trạng thái 'Chờ duyệt' để Admin xử lý
                     df_pending = df_raw[df_raw['trang_thai'] == "Chờ duyệt"].copy()
-
                     if not df_pending.empty:
-                        # --- LOGIC GOM NHÓM NGÀY LIÊN TIẾP ---
+                        # Logic gom nhóm ngày (Giữ nguyên)
                         def group_consecutive_days(group):
-                            # Sắp xếp theo ngày để tính toán liên tiếp
                             group = group.sort_values('ngay_nghi')
-                            
-                            # Tạo mã nhóm cho các ngày liên tiếp
                             day_diff = group['ngay_nghi'].diff().dt.days != 1
                             group_id = day_diff.cumsum()
-                            
                             res_groups = []
                             for _, g in group.groupby(group_id):
-                                # Sử dụng .iloc[0] để lấy giá trị đầu tiên của nhóm mà không quan tâm đến index
                                 res_groups.append({
                                     "username": g['username'].iloc[0],
                                     "Họ và Tên": g['ho_ten'].iloc[0] if 'ho_ten' in g.columns else "N/A",
@@ -1232,21 +1306,15 @@ if menu == "🕒 Chấm công đi làm":
                                 })
                             return res_groups
 
-                        # Thực hiện gom nhóm theo User, Lý do và Buổi nghỉ
                         for _, subgroup in df_pending.groupby(['username', 'ly_do', 'buoi_nghi']):
                             grouped_data.extend(group_consecutive_days(subgroup))
-
                         df_display = pd.DataFrame(grouped_data)
-                    else:
-                        st.info("ℹ️ Hiện không có đơn nào đang chờ duyệt.")
-                else:
-                    st.info("ℹ️ Hệ thống chưa có dữ liệu đăng ký nghỉ.")
 
-                # 2. Hiển thị bảng chọn đơn (Chỉ hiện khi có đơn chờ duyệt)
+                # 2. HIỂN THỊ BẢNG (CHỈ KHI CÓ ĐƠN CHỜ DUYỆT)
+                selected_indices = [] # Khởi tạo danh sách chọn rỗng
+                
                 if not df_display.empty:
                     st.write("📌 *Danh sách đơn chờ xử lý (Chọn hàng để thao tác):*")
-                    
-                    # Loại bỏ cột 'ids' trước khi hiển thị để bảng gọn đẹp
                     event = st.dataframe(
                         df_display.drop(columns=['ids']), 
                         use_container_width=True,
@@ -1255,91 +1323,113 @@ if menu == "🕒 Chấm công đi làm":
                         selection_mode="multi-row",
                         key="df_approve_table_v3"
                     )
-
                     selected_indices = event.selection.rows
-                    st.divider()
+                else:
+                    st.info("🎉 Hiện không có đơn nào đang chờ duyệt.")
 
-                    # --- PHẦN 2: XỬ LÝ CHI TIẾT & LỊCH SỬ ---
-                    col_form, col_history = st.columns([2, 3])
+                st.divider()
 
-                    # A. KHỐI XỬ LÝ ĐƠN (Bên trái)
-                    with col_form:
-                        if selected_indices:
-                            first_selection = df_display.iloc[selected_indices[0]]
-                            # Gom tất cả các ID từ các hàng được chọn để xử lý hàng loạt
-                            all_selected_ids = []
-                            for idx in selected_indices:
-                                all_selected_ids.extend(df_display.iloc[idx]['ids'])
+                # 3. CHIA CỘT (LUÔN THỰC HIỆN BẤT KỂ CÓ ĐƠN HAY KHÔNG)
+                col_form, col_history = st.columns([2, 3])
 
-                            st.markdown(f"#### 📝 Xử lý đơn: **{first_selection['Họ và Tên']}**")
-                            st.caption(f"Đang chọn {len(all_selected_ids)} ngày nghỉ.")
-                            
-                            reason_reject = st.text_area("Lý do từ chối (Bắt buộc nếu bấm Từ chối):", 
-                                                        placeholder="Nhập nội dung phản hồi cho nhân viên...",
-                                                        key="reject_area_admin")
-                            
-                            c1, c2 = st.columns(2)
-                            
-                            # NÚT DUYỆT
-                            if c1.button("✅ Duyệt", type="primary", use_container_width=True):
+                # --- A. KHỐI FORM XỬ LÝ (BÊN TRÁI) ---
+                with col_form:
+                    if selected_indices and not df_display.empty:
+                        first_selection = df_display.iloc[selected_indices[0]]
+                        all_selected_ids = []
+                        for idx in selected_indices:
+                            all_selected_ids.extend(df_display.iloc[idx]['ids'])
+
+                        st.markdown(f"#### 📝 Xử lý đơn: **{first_selection['Họ và Tên']}**")
+                        st.caption(f"Đang chọn {len(all_selected_ids)} ngày nghỉ.")
+                        
+                        reason_reject = st.text_area("Lý do từ chối (Bắt buộc nếu Từ chối):", 
+                                                    placeholder="Nhập lý do...",
+                                                    key="reject_area_admin")
+                        
+                        c1, c2 = st.columns(2)
+                        
+                        # Logic Nút Duyệt
+                        if c1.button("✅ Duyệt", type="primary", use_container_width=True):
+                            try:
+                                supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
+                                st.cache_data.clear()
+                                st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
+
+                        # Logic Nút Từ chối
+                        if c2.button("❌ Từ chối", use_container_width=True):
+                            if not reason_reject.strip():
+                                st.error("⚠️ Phải nhập lý do!")
+                            else:
                                 try:
-                                    supabase.table("dang_ky_nghi").update({"trang_thai": "Đã duyệt"}).in_("id", all_selected_ids).execute()
-                                    # Xóa cache và tăng trigger để tải lại dữ liệu mới ngay lập tức
+                                    supabase.table("dang_ky_nghi").update({
+                                        "trang_thai": "Bị từ chối", 
+                                        "ly_do": f"❌ TỪ CHỐI: {reason_reject.strip()}"
+                                    }).in_("id", all_selected_ids).execute()
                                     st.cache_data.clear()
                                     st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
-                                    st.session_state.toast_message = f"✅ Đã duyệt đơn cho {first_selection['Họ và Tên']}!"
                                     st.rerun()
                                 except Exception as e:
-                                    st.error(f"Lỗi khi duyệt: {e}")
+                                    st.error(f"Lỗi: {e}")
+                    else:
+                        # Hiển thị khi chưa chọn đơn hoặc không có đơn
+                        st.info("💡 Chọn đơn ở bảng trên để hiện Form xử lý.")
+                        st.caption("Nếu không có đơn chờ, khu vực này sẽ trống.")
 
-                            # NÚT TỪ CHỐI
-                            if c2.button("❌ Từ chối", use_container_width=True):
-                                if not reason_reject.strip():
-                                    st.error("⚠️ Bạn phải nhập lý do từ chối!")
+                # --- B. KHỐI LỊCH SỬ (BÊN PHẢI) - LUÔN HIỂN THỊ ---
+                with col_history:
+                    st.markdown("#### 🕒 Nhật ký hoạt động")
+
+                    tab_p, tab_a = st.tabs(["📝 Lịch sử đăng ký", "✅ Lịch sử phê duyệt"])
+
+                    # --- Tab 1: Đơn mới ---
+                    with tab_p:
+                        # Container có chiều cao cố định -> Tự động cuộn
+                        with st.container(height=420, border=False):
+                            try:
+                                res_p = supabase.table("dang_ky_nghi").select("*").eq("trang_thai", "Chờ duyệt").order("created_at", desc=True).limit(50).execute()
+                                p_groups = get_grouped_history(res_p.data)
+                                
+                                if p_groups:
+                                    for item in p_groups:
+                                        with st.container(border=True):
+                                            st.markdown(f"**{item['ho_ten']}** ({item['count']}n)")
+                                            st.markdown(f"📅 {item['range']}")
+                                            st.caption(f"💬 {item['ly_do']}")
                                 else:
-                                    try:
-                                        supabase.table("dang_ky_nghi").update({
-                                            "trang_thai": "Bị từ chối", 
-                                            "ly_do": f"❌ TỪ CHỐI: {reason_reject.strip()}"
-                                        }).in_("id", all_selected_ids).execute()
-                                        st.cache_data.clear()
-                                        st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
-                                        st.session_state.toast_message = "❌ Đã từ chối đơn thành công."
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Lỗi khi từ chối: {e}")
-                        else:
-                            st.info("💡 Chọn một hoặc nhiều đơn phía trên để bắt đầu phê duyệt.")
+                                    st.caption("Không có đơn đăng ký mới.")
+                            except Exception as e: 
+                                st.error("Lỗi tải nhật ký.")
 
-                    # B. KHỐI LỊCH SỬ (Bên phải)
-                    with col_history:
-                        if selected_indices:
-                            first_selection = df_display.iloc[selected_indices[0]]
-                            st.markdown(f"#### 🕒 Lịch sử: **{first_selection['Họ và Tên']}**")
-                            # Hàm hiển thị lịch sử nghỉ của riêng User đang chọn
-                            display_user_history(first_selection['username'], supabase)
-                        else:
-                            st.markdown("#### ✅ Đã xử lý gần đây")
-                            # Hiển thị 5 đơn vừa mới xử lý xong (Đã duyệt/Từ chối) để Admin theo dõi
-                            recent_res = supabase.table("dang_ky_nghi")\
-                                .select("ngay_nghi, ho_ten, trang_thai, ly_do")\
-                                .neq("trang_thai", "Chờ duyệt")\
-                                .order("created_at", desc=True)\
-                                .limit(5).execute()
+                    # --- Tab 2: Lịch sử phê duyệt ---
+                    with tab_a:
+                        with st.container(height=420, border=False):
+                            try:
+                                res_a = supabase.table("dang_ky_nghi").select("*").neq("trang_thai", "Chờ duyệt").order("created_at", desc=True).limit(50).execute()
+                                a_groups = get_grouped_history(res_a.data)
+                                
+                                if a_groups:
+                                    for item in a_groups:
+                                        color = "#28a745" if item['trang_thai'] == "Đã duyệt" else "#dc3545"
+                                        icon = "✅" if item['trang_thai'] == "Đã duyệt" else "❌"
+                                        with st.container(border=True):
+                                            st.markdown(f"**{icon} {item['ho_ten']}** ({item['count']}n)")
+                                            st.markdown(f"📅 {item['range']} : <span style='color:{color}; font-weight:bold;'>{item['trang_thai']}</span>", unsafe_allow_html=True)
+                                            st.caption(f"📝 {item['ly_do']}")
+                                else:
+                                    st.caption("Chưa có lịch sử xử lý.")
+                            except Exception as e: 
+                                st.error("Lỗi tải lịch sử.")
 
-                            if recent_res.data:
-                                for item in recent_res.data:
-                                    status_color = "#28a745" if item['trang_thai'] == "Đã duyệt" else "#dc3545"
-                                    with st.container(border=True):
-                                        d_str = pd.to_datetime(item['ngay_nghi']).strftime('%d/%m/%Y')
-                                        st.markdown(f"**{item['ho_ten']}** - 📅 {d_str}")
-                                        st.markdown(f"Trạng thái: <span style='color:{status_color}; font-weight:bold;'>{item['trang_thai']}</span>", unsafe_allow_html=True)
-                            else:
-                                st.caption("Chưa có đơn nào được xử lý gần đây.")               
-                        
-                        # Hiển thị lịch sử tổng hợp (Nếu có hàm này)
-                        if 'display_general_history' in globals():
-                            display_general_history(supabase)
+                # --- C. CHI TIẾT LỊCH SỬ CÁ NHÂN (NẾU ĐANG CHỌN) ---
+                if selected_indices and not df_display.empty:
+                    st.divider()
+                    first_selection = df_display.iloc[selected_indices[0]]
+                    with st.expander(f"🔍 Toàn bộ lịch sử của {first_selection['Họ và Tên']}", expanded=False):
+                        display_user_history(first_selection['username'], supabase)
 
             
     # =========================================================
@@ -1398,17 +1488,22 @@ if menu == "🕒 Chấm công đi làm":
                     
                     # --- XỬ LÝ XUẤT EXCEL (Giữ nguyên cấu trúc logic) ---
                     output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer: 
-                        df_report.to_excel(writer, index=False, sheet_name='BaoCao')
-                        
-                        # Cấu hình format file Excel
-                        workbook  = writer.book
-                        worksheet = writer.sheets['BaoCao']
-                        header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
-                        for col_num, value in enumerate(df_report.columns.values):
-                            worksheet.write(0, col_num, value, header_format)
-                            worksheet.set_column(col_num, col_num, 15)
-
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        @st.cache_data
+                        #hàm xuất Excel
+                        def convert_df_to_excel(df_source):
+                            output = io.BytesIO()
+                            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                df_source.to_excel(writer, index=False, sheet_name='Báo cáo')
+                                # Cấu hình format file Excel
+                                workbook  = writer.book
+                                worksheet = writer.sheets['BaoCao']
+                                header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+                                for col_num, value in enumerate(df_report.columns.values):
+                                    worksheet.write(0, col_num, value, header_format)
+                                    worksheet.set_column(col_num, col_num, 15)
+                            return output.getvalue() 
+                        excel_data = convert_df_to_excel(df_display)
                     st.download_button(
                         label="📥 Tải báo cáo Excel",
                         data=output.getvalue(),
@@ -1444,239 +1539,139 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                     }) \
                     .eq("id", record_id) \
                     .execute()
-                    
+                st.cache_data.clear()
+                st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1   
                 return True
         except Exception as e:
             st.error(f"Lỗi cập nhật trên Cloud: {e}")
             return False
-# --- TAB 1: GỬI ĐƠN LẮP ĐẶT (TỐI ƯU CHO COOKIE) ---
-    with tabs[0]:
-        # Lấy trực tiếp từ Session State đã nạp bởi Cookie Manager
-        user = st.session_state.get("username")
-        role = st.session_state.get("role")
-        ho_ten_sender = st.session_state.get("ho_ten", user)
 
-        # --- PHẦN PHÂN QUYỀN CHỌN NHÂN VIÊN (SUPABASE) ---
-        target_user = user # Mặc định là chính mình
-        is_management = role in ["Manager", "Admin", "System Admin"]
+# --- GIAO DIỆN TAB Chấm công---
+with tabs[0]:
+    user = st.session_state.get("username")
+    role = st.session_state.get("role")
+    
+    # Sử dụng hàm cache
+    raw_nv = get_employee_list(role)
+    df_nv = pd.DataFrame(raw_nv)
+    
+    target_user = user
+    if not df_nv.empty and role in ["Manager", "Admin", "System Admin"]:
+        df_nv['display'] = df_nv['ho_ten'] + " (" + df_nv['username'] + ")"
         
-        if is_management:
-            try:
-                # Truy vấn danh sách nhân viên từ Supabase
-                if role in ["System Admin", "Admin"]:
-                    response_nv = supabase.table("quan_tri_vien") \
-                        .select("username, ho_ten") \
-                        .in_("role", ["Manager", "User"]) \
-                        .execute()
-                else: # Manager
-                    response_nv = supabase.table("quan_tri_vien") \
-                        .select("username, ho_ten") \
-                        .eq("role", "User") \
-                        .execute()
-                
-                df_nv_list = pd.DataFrame(response_nv.data)
-            except Exception as e:
-                st.error(f"Lỗi tải danh sách nhân viên: {e}")
-                df_nv_list = pd.DataFrame()
-            
-            if not df_nv_list.empty:
-                df_nv_list['display'] = df_nv_list['ho_ten'] + " (" + df_nv_list['username'] + ")"
-                if role in ["System Admin", "Admin"]:
-                    options = df_nv_list['display'].tolist()
-                    sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt cho nhân viên:", options)
-                    target_user = df_nv_list[df_nv_list['display'] == sel_nv_display]['username'].values[0]
-                else:
-                    options = ["Tự chấm công"] + df_nv_list['display'].tolist()
-                    sel_nv_display = st.selectbox("🎯 Chấm công lắp đặt thay cho:", options)
-                    if sel_nv_display != "Tự chấm công":
-                        target_user = df_nv_list[df_nv_list['display'] == sel_nv_display]['username'].values[0]
-                    else:
-                        target_user = user
+        # UI chọn nhân viên
+        if role in ["Admin", "System Admin"]:
+            sel = st.selectbox("🎯 Chấm công cho:", df_nv['display'])
+            target_user = df_nv.loc[df_nv['display'] == sel, 'username'].values[0]
+        else:
+            sel = st.selectbox("🎯 Chấm công thay cho:", ["Tự chấm công"] + df_nv['display'].tolist())
+            if sel != "Tự chấm công":
+                target_user = df_nv.loc[df_nv['display'] == sel, 'username'].values[0]
 
-        if "f_up_key" not in st.session_state: st.session_state["f_up_key"] = 0
-        uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn *", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
+    # Form nhập liệu
+    if "f_up_key" not in st.session_state: st.session_state["f_up_key"] = 0
+    uploaded_file = st.file_uploader("🖼️ Ảnh hóa đơn *", type=["jpg", "png", "jpeg"], key=f"up_{st.session_state['f_up_key']}")
+
+    with st.form("form_lap_dat", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        so_hd_in = c1.text_input("📝 Số hóa đơn *")
+        quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0)
         
-        with st.form("form_lap_dat", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            so_hd_in = c1.text_input("📝 Số hóa đơn *", placeholder="VD: HD12345")
-            quang_duong = c2.number_input("🛣️ Quãng đường (km) *", min_value=0, step=1)
-            
-            st.write("---")
-            st.markdown("**📦 Số lượng thiết bị lắp đặt:**")
-            m1, m2 = st.columns(2)
-            combo_may_lon = m1.number_input("🤖 Máy lớn (200k/máy)", min_value=0, step=1)
-            combo_may_nho = m2.number_input("📦 Máy nhỏ / Vật tư", min_value=0, step=1)
-            
-            noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *", height=100)     
-            noi_dung = noi_dung.title().strip()
-            
-            if st.form_submit_button("🚀 GỬI YÊU CẦU DUYỆT ĐƠN", use_container_width=True):
-                if not uploaded_file or not so_hd_in or not noi_dung:
-                    st.error("❌ Yêu cầu đầy đủ ảnh hoá đơn, số hoá đơn và địa chỉ!")              
-                elif combo_may_lon == 0 and combo_may_nho == 0:
-                    st.error("❌ Vui lòng nhập ít nhất 1 loại máy!")
-                else:
-                    so_hd = so_hd_in.strip().upper()
-                    final_hd = f"HD{so_hd}" if not so_hd.startswith("HD") else so_hd
-                    
-                    # --- LOGIC TÍNH TOÁN ---
-                    if quang_duong <= 50:
-                        don_gia_km = 30000 if quang_duong < 20 else 50000 if quang_duong <= 30 else 70000 if quang_duong <= 40 else 80000
-                    else:
-                        don_gia_km = 80000 + (quang_duong - 50) * 5000
-                        
-                    tong_tien = (combo_may_lon * 200000) + (combo_may_nho * don_gia_km)
-                    tong_combo = combo_may_lon + combo_may_nho
-                    noi_dung_final = f"{noi_dung} | (Máy lớn: {combo_may_lon}, Máy nhỏ: {combo_may_nho})"
-                    
-                    # --- XỬ LÝ ẢNH & LƯU SUPABASE ---
-                    try:
-                        # Chuyển ảnh thành Base64 (Chuỗi văn bản) để lưu vào cột text/longtext của Supabase
-                        import base64
-                        img_bytes = uploaded_file.read()
-                        base64_image = base64.b64encode(img_bytes).decode('utf-8')
-
-                        data_insert = {
-                            "username": target_user,
-                            "ten": ho_ten_sender,
-                            "thoi_gian": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "so_hoa_don": final_hd,
-                            "noi_dung": noi_dung_final,
-                            "quang_duong": int(quang_duong),
-                            "combo": int(tong_combo),
-                            "thanh_tien": float(tong_tien),
-                            "hinh_anh": base64_image, # Lưu dạng chuỗi Base64
-                            "trang_thai": 'Chờ duyệt'
-                        }
-
-                        # Thực thi chèn dữ liệu vào Supabase
-                        res = supabase.table("cham_cong").insert(data_insert).execute()
-                        
-                        if res.data:
-                            st.session_state.toast_message = f"✅ Gửi đơn thành công cho nhân viên: {ho_ten_sender}"
-                            st.session_state["f_up_key"] += 1
-                            st.rerun()
-                        else:
-                            st.error("❌ Không thể lưu dữ liệu vào Cloud.")
-
-                    except Exception as e:
-                        # Xử lý lỗi trùng số hóa đơn (Unique Constraint trong Supabase)
-                        err_msg = str(e)
-                        if "duplicate key" in err_msg or "already exists" in err_msg:
-                            st.error(f"❌ Số hóa đơn **{final_hd}** đã tồn tại trên hệ thống!")
-                        else:
-                            st.error(f"❌ Lỗi hệ thống: {e}")
-# --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/SYSTEM ADMIN/MANAGER) ---
-    if role in ["Admin", "System Admin", "Manager","User"]:
-        with tabs[1]:
-            st.markdown("#### 📋 Danh sách đơn chờ duyệt")
-            
-            try:
-                # 1. Truy vấn đơn hàng 'Chờ duyệt' và JOIN lấy ho_ten từ bảng quan_tri_vien
-                res = supabase.table("cham_cong") \
-                    .select("*, quan_tri_vien(ho_ten)") \
-                    .eq("trang_thai", "Chờ duyệt") \
-                
-                if role not in ["Admin", "System Admin", "Manager"]:
-                    res = res.eq("username", user_hien_tai)
-                # 3. Sắp xếp và thực thi gửi lệnh lên Server
-                res = res.order("thoi_gian", desc=False).execute()
-                df_p = pd.DataFrame(res.data)
-                
-                # Xử lý lấy ho_ten từ kết quả lồng nhau của Supabase
-                if not df_p.empty:
-                    df_p['ho_ten_nv'] = df_p['quan_tri_vien'].apply(lambda x: x['ho_ten'] if x else "N/A")
-            except Exception as e:
-                st.error(f"❌ Lỗi kết nối dữ liệu Cloud: {e}")
-                df_p = pd.DataFrame()
-
-            if df_p.empty:
-                st.info("📭 Hiện tại không có đơn nào đang chờ duyệt.")
+        m1, m2 = st.columns(2)
+        c_lon = m1.number_input("🤖 Máy lớn", min_value=0)
+        c_nho = m2.number_input("📦 Máy nhỏ/Vật tư", min_value=0)
+        
+        noi_dung = st.text_area("📍 Địa chỉ / Ghi chú *").title().strip()
+        
+        submit = st.form_submit_button("🚀 GỬI YÊU CẦU", use_container_width=True)
+        
+        if submit:
+            if not uploaded_file or not so_hd_in or not noi_dung:
+                st.error("❌ Thiếu thông tin bắt buộc!")
+            elif c_lon == 0 and c_nho == 0:
+                st.error("❌ Nhập ít nhất 1 loại máy!")
             else:
-                # Duyệt qua từng đơn hàng để hiển thị dạng Expander
-                for _, r in df_p.iterrows():
-                    # Tiêu đề expander hiển thị các thông tin cơ bản
-                    # 1. Chuyển đổi chuỗi thời gian sang kiểu datetime
-                    dt_raw = pd.to_datetime(r['thoi_gian'])
-
-                    # 2. Xử lý múi giờ Việt Nam (UTC sang Asia/Ho_Chi_Minh)
-                    try:
-                        # Nếu dữ liệu đã có múi giờ (tz-aware)
-                        if dt_raw.tz is not None:
-                            dt_vn = dt_raw.tz_convert('Asia/Ho_Chi_Minh')
-                        else:
-                            # Nếu dữ liệu chưa có múi giờ, coi như là UTC rồi chuyển sang VN
-                            dt_vn = dt_raw.tz_localize('UTC').tz_convert('Asia/Ho_Chi_Minh')
-                    except:
-                        # Fallback: Nếu lỗi múi giờ, cộng thủ công 7 tiếng
-                        dt_vn = dt_raw + pd.Timedelta(hours=7)
-
-                    # 3. Định dạng chuỗi hiển thị
-                    time_display = dt_vn.strftime('%d/%m/%Y %H:%M')
-
-                    # 4. Đưa vào tiêu đề Expander
-                    expander_title = f"📦 HĐ: {r['so_hoa_don']} — 👤 {r['ho_ten_nv']} — 🕒 {time_display}"
+                # Xử lý dữ liệu
+                so_hd = so_hd_in.strip().upper()
+                final_hd = so_hd if so_hd.startswith("HD") else f"HD{so_hd}"
+                tong_tien = calculate_total_amount(quang_duong, c_lon, c_nho)
+                
+                try:
+                    # Chuyển ảnh (Vẫn giữ Base64 theo yêu cầu cũ nhưng nên cân nhắc Storage)
+                    img_base64 = base64.b64encode(uploaded_file.read()).decode()
                     
-                    with st.expander(expander_title):
-                        cl, cr = st.columns([1.5, 1])
-                        
-                        with cl:
-                            # Thông tin chi tiết đơn hàng
-                            st.write(f"**📍 Địa chỉ/Ghi chú:** {r['noi_dung']}")
-                            st.write(f"🛣️ Quãng đường: **{r['quang_duong']} km** | 📦 Tổng thiết bị: **{r['combo']} máy**")
-                            st.markdown(f"#### 💰 Tổng tiền: `{r['thanh_tien']:,.0f}` VNĐ")
-                            
-                            st.write("---")
-                            
-                            # --- PHÂN QUYỀN THAO TÁC NÚT BẤM ---
-                            # Chỉ Admin/System Admin mới có quyền thay đổi trạng thái đơn
-                        
-                            if role in ["Admin", "System Admin"]:
-                                b1, b2 = st.columns(2)
-                                
-                                # Nút phê duyệt nhanh
-                                if b1.button("✅ DUYỆT ĐƠN", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
-                                    if quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác"):
-                                        st.session_state.toast_message = f"✅ Đã duyệt đơn {r['so_hoa_don']}"
-                                        st.rerun()
+                    payload = {
+                        "username": target_user,
+                        "thoi_gian": datetime.now().isoformat(),
+                        "so_hoa_don": final_hd,
+                        "noi_dung": f"{noi_dung} | (L:{c_lon}, N:{c_nho})",
+                        "quang_duong": quang_duong,
+                        "combo": c_lon + c_nho,
+                        "thanh_tien": tong_tien,
+                        "hinh_anh": img_base64,
+                        "trang_thai": 'Chờ duyệt'
+                    }
+                    
+                    res = supabase.table("cham_cong").insert(payload).execute()
+                    if res.data:
+                        st.success("✅ Đã gửi đơn thành công!")
+                        st.session_state["f_up_key"] += 1
+                        st.cache_data.clear() # Quan trọng: Xóa cache tab danh sách để hiện đơn mới ngay
+                        st.rerun()
+                except Exception as e:
+                    if "duplicate" in str(e): st.error(f"❌ Số HĐ {final_hd} đã tồn tại!")
+                    else: st.error(f"❌ Lỗi: {e}")
+# --- TAB 2: DUYỆT ĐƠN (CHỈ ADMIN/SYSTEM ADMIN/MANAGER) ---
+if role in ["Admin", "System Admin", "Manager", "User"]:
+    with tabs[1]:
+        st.markdown("#### 📋 Danh sách đơn chờ duyệt")
+        
+        data = get_pending_requests(role, user_hien_tai)
+        
+        if not data:
+            st.info("📭 Hiện tại không có đơn nào đang chờ duyệt.")
+        else:
+            for r in data:
+                # Xử lý tên nhân viên từ kết quả join
+                ho_ten_nv = r.get('quan_tri_vien', {}).get('ho_ten', 'N/A') if r.get('quan_tri_vien') else "N/A"
+                time_display = format_vn_time(r['thoi_gian'])
+                
+                expander_title = f"📦 HĐ: {r['so_hoa_don']} — 👤 {ho_ten_nv} — 🕒 {time_display}"
+                
+                with st.expander(expander_title):
+                    cl, cr = st.columns([1.5, 1])
+                    with cl:
+                        st.write(f"**📍 Địa chỉ:** {r['noi_dung']}")
+                        st.write(f"🛣️ **{r['quang_duong']} km** | 📦 **{r['combo']} máy**")
+                        st.markdown(f"#### 💰 Tổng: `{r['thanh_tien']:,.0f}` VNĐ")
+                        st.divider()
+
+                        # Logic phân quyền nút bấm
+                        if role in ["Admin", "System Admin"]:
+                            b1, b2 = st.columns(2)
+                            if b1.button("✅ DUYỆT", key=f"ap_{r['id']}", use_container_width=True, type="primary"):
+                                if quick_update_status(r["id"], "Đã duyệt", "Thông tin chính xác"):
+                                    st.cache_data.clear() # Xóa cache để load lại data mới
+                                    st.rerun()
                                             
-                                # Nút từ chối đơn với lý do cụ thể
-                                with b2:
-                                    with st.popover("❌ TỪ CHỐI", use_container_width=True):
-                                        reason = st.text_area("Nhập lý do từ chối đơn:", key=f"txt_{r['id']}", placeholder="VD: Ảnh mờ, sai số hóa đơn...")
-                                        if st.button("Xác nhận từ chối", key=f"conf_{r['id']}", use_container_width=True):
-                                            if not reason.strip():
-                                                st.error("⚠️ Bạn phải nhập lý do từ chối!")
-                                            else:
-                                                if quick_update_status(r["id"], "Từ chối", reason.strip()):
-                                                    st.session_state.toast_message = "🔴 Đã từ chối đơn "
-                                                    st.rerun()
-                            elif user_hien_tai:
-                                # 2. QUYỀN USER (CHỦ ĐƠN): Cho phép xem thông tin đơn đang chờ
-                                if r["trang_thai"] == "Chờ duyệt":
-                                    st.warning("⏳ Đơn đang trong trạng thái chờ Kế toán phê duyệt.")
-                                elif r["trang_thai"] == "Từ chối":
-                                    st.error(f"❌ Đơn bị từ chối. Lý do: {r.get('ghi_chu_duyet', 'Không có lý do cụ thể')}")
-                                else:
-                                    st.success("✅ Đơn đã được duyệt thành công.")
-                            else:
-                                # Nếu là Manager (Chỉ xem, không có quyền duyệt tiền)
-                                st.info("ℹ️ Bạn chỉ có thể xem đơn. Quyền Duyệt/Từ chối thuộc về Kế toán.")
-                                    
-                        with cr:
-                            # --- XỬ LÝ HIỂN THỊ ẢNH ĐỐI SOÁT (BASE64) ---
-                            if r.get("hinh_anh"):
-                                try:
-                                    # Chuẩn hóa chuỗi Base64 nếu thiếu tiền tố để hiển thị được trong Streamlit
-                                    img_base64 = r["hinh_anh"]
-                                    if not img_base64.startswith("data:image"):
-                                        img_base64 = f"data:image/jpeg;base64,{img_base64}"
-                                    
-                                    st.image(img_base64, caption=f"Ảnh hóa đơn {r['so_hoa_don']}", use_container_width=True)
-                                except Exception as e:
-                                    st.error(f"⚠️ Lỗi hiển thị ảnh: {e}")
-                            else:
-                                st.warning("⚠️ Đơn này không đính kèm ảnh hóa đơn.")
+                            with b2:
+                                with st.popover("❌ TỪ CHỐI", use_container_width=True):
+                                    reason = st.text_area("Lý do:", key=f"txt_{r['id']}")
+                                    if st.button("Xác nhận", key=f"conf_{r['id']}"):
+                                        if reason.strip() and quick_update_status(r["id"], "Từ chối", reason.strip()):
+                                            st.cache_data.clear()
+                                            st.rerun()
+                        else:
+                            st.info("⏳ Đang chờ kế toán duyệt" if role == "User" else "ℹ️ Chế độ chỉ xem")
+
+                    with cr:
+                        if r.get("hinh_anh"):
+                            img_data = r["hinh_anh"]
+                            if not img_data.startswith("data:image"):
+                                img_data = f"data:image/jpeg;base64,{img_data}"
+                            st.image(img_data, use_container_width=True)
+                        else:
+                            st.warning("Không có ảnh")
 # --- TAB 3: BÁO CÁO LẮP ĐẶT  ---
     with tabs[-1]:
         # Lấy thông tin từ Session (đã nạp bởi Cookie Manager)
@@ -1702,7 +1697,8 @@ elif menu == "📦 Giao hàng - Lắp đặt":
             # Kiểm tra nếu có dữ liệu trả về thành công
             if res and res.data:
                 # Tạo df_raw để xử lý trung gian
-                df_raw = load_data()
+                df_raw = pd.DataFrame(res.data)
+                
                 # 2. Xử lý lấy 'ho_ten' an toàn từ bảng quan_tri_vien
                 if 'quan_tri_vien' in df_raw.columns:
                     df_raw['Tên'] = df_raw['quan_tri_vien'].apply(lambda x: x['ho_ten'] if isinstance(x, dict) else "N/A")
@@ -1823,10 +1819,6 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             
                             # 2. TRÍCH XUẤT DỮ LIỆU SAU LỌC
                             df_display = df_all[mask].sort_values("Thời Gian", ascending=False)
-                        # --- 2. Hàm xử lý logic chuyển trang (Callback) ---
-                            def handle_page_change(delta):
-                                st.session_state.current_page += delta
-
 
                             if df_display.empty:
                                 st.info("🔍 Không có dữ liệu phù hợp với bộ lọc.")
@@ -1866,7 +1858,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     }
 
                                     .stat-value {
-                                        color: #dc2626;
+                                        color: #ffffff;
                                         font-size: 2rem;
                                         font-weight: 800;
                                         line-height: 1;
@@ -1954,117 +1946,65 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 final_cols = [c for c in desired_columns if c in df_view.columns]
                                 df_final = df_view[final_cols]
 
-                                # --- 🚀 LOGIC PHÂN TRANG (PAGINATION) ---
-                                
-                                items_per_page = 10
-                                total_rows = len(df_final)
-                                total_pages = (total_rows // items_per_page) + (1 if total_rows % items_per_page > 0 else 0)
+                                # --- 🚀 CẤU HÌNH CỘT VÀ CSS ---
+                                column_configuration = {
+                                    "Tên": st.column_config.TextColumn("Tên", width="medium"),
+                                    "Lý do": st.column_config.TextColumn("Lý do", width="large"),
+                                    "Thành tiền": st.column_config.NumberColumn("Thành tiền", format="%d ₫"),
+                                }
 
-                                # Khởi tạo hoặc kiểm tra session_state cho phân trang
-                                if 'current_page' not in st.session_state:
-                                    st.session_state.current_page = 1
-                                
-                                # Đảm bảo trang hiện tại không vượt quá tổng số trang sau khi lọc
-                                if st.session_state.current_page > total_pages:
-                                    st.session_state.current_page = max(1, total_pages)
-
-                                # Cắt dữ liệu hiển thị theo trang
-                                start_idx = (st.session_state.current_page - 1) * items_per_page
-                                end_idx = start_idx + items_per_page
-                                df_page = df_final.iloc[start_idx:end_idx]
-
-                                # Hiển thị bảng (Chỉ 10 dòng)
-                                #st.dataframe(df_page, use_container_width=True, hide_index=True)
-                                # --- CHỈ SYSTEM ADMIN MỚI THẤY CỘT CHỌN XÓA ---
-                                is_admin = st.session_state.get("role") == "System Admin"
-
-                                if is_admin:
-                                    # Thêm cột checkbox vào đầu bảng (mặc định là False)
-                                    df_page.insert(0, "🗑️", False)
-                                    
-                                    # Sử dụng data_editor để có thể tích chọn
-                                    edited_df = st.data_editor(
-                                        df_page,
-                                        use_container_width=True,
-                                        hide_index=True,
-                                        disabled=[c for c in df_page.columns if c != "🗑️"], # Chỉ cho phép sửa cột checkbox
-                                        key="editor_delete_table"
-                                    )
-
-                                    # Lọc ra các dòng được tích chọn xóa
-                                    rows_to_delete = edited_df[edited_df["🗑️"] == True]
-                                    
-                                    if not rows_to_delete.empty:
-                                        st.warning(f"⚠️ Đang chọn {len(rows_to_delete)} đơn để xóa.")
-                                        if st.button("🔥 XÁC NHẬN XÓA VĨNH VIỄN", type="primary", use_container_width=True):
-                                            try:
-                                                # Chú ý: Nếu bảng hiển thị đã đổi tên cột thành "Số HĐ", 
-                                                # bạn phải dùng rows_to_delete["Số HĐ"]
-                                                list_so_hd = rows_to_delete["Số HĐ"].tolist() 
-                                                
-                                                for hd_id in list_so_hd:
-                                                    # Sửa 'value' thành 'hd_id' để khớp với biến vòng lặp
-                                                    response = supabase.table("cham_cong").delete().eq("so_hoa_don", hd_id).execute()                                                
-                                                
-                                                st.session_state.toast_message = "✅ Đã xóa các đơn được chọn thành công!"
-                                                st.rerun()
-                                            except Exception as e:
-                                                st.error(f"Lỗi khi xóa: {e}")
-                                else:
-                                    # Nếu không phải admin, hiển thị bảng xem thông thường
-                                    st.dataframe(df_page, use_container_width=True, hide_index=True)
-                                # --- BỘ CHUYỂN TRANG ---
                                 st.markdown("""
                                     <style>
-                                    /* Ép các cột phân trang luôn nằm ngang trên điện thoại */
-                                    [data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-                                        width: 33.33% !important;
-                                        flex: 1 1 33.33% !important;
-                                        min-width: 33.33% !important;
-                                    }
-                                    .page-info {
-                                        text-align: center; 
-                                        line-height: 40px; 
-                                        font-weight: bold; 
-                                        font-size: 14px;
-                                    }
+                                        /* Căn giữa STT: Nhắm vào cột 1 (User) và cột 2 (Admin vì cột 1 là checkbox) */
+                                        [data-testid="stDataFrame"] td:nth-child(1),
+                                        [data-testid="stDataFrame"] td:nth-child(2) {
+                                            text-align: center !important;
+                                        }
                                     </style>
                                 """, unsafe_allow_html=True)
-                                
 
-                                # --- 3. Logic hiển thị phân trang ---
-                                # Giả sử bạn đã tính được total_pages từ dữ liệu đã lấy
-                                if total_pages > 1:
-                                    st.write("---") # Đường kẻ phân cách nhẹ
-                                    
-                                    # Tạo 3 cột bằng nhau
-                                    p_col1, p_col2, p_col3 = st.columns(3, gap="small")
-                                    
-                                    with p_col1:
-                                        st.button(
-                                            "⬅️ Trước", 
-                                            on_click=handle_page_change, 
-                                            args=(-1,), 
-                                            disabled=(st.session_state.current_page <= 1),
+                                scroll_height = 400 
+                                is_admin = st.session_state.get("role") == "System Admin"
+                                rows_to_delete = pd.DataFrame() # Khởi tạo biến rỗng tránh lỗi
+
+                                # --- HIỂN THỊ DỮ LIỆU ---
+                                with st.container(height=scroll_height, border=False):
+                                    if is_admin:
+                                        df_to_edit = df_final.copy()
+                                        df_to_edit.insert(0, "🗑️", False)
+                                        
+                                        edited_df = st.data_editor(
+                                            df_to_edit,
                                             use_container_width=True,
-                                            key="prev_btn"
+                                            hide_index=True,
+                                            column_config=column_configuration,
+                                            disabled=[c for c in df_to_edit.columns if c != "🗑️"],
+                                            key="editor_delete_table_scroll"
+                                        )
+                                        rows_to_delete = edited_df[edited_df["🗑️"] == True]
+                                    else:
+                                        st.dataframe(
+                                            df_final, 
+                                            use_container_width=True, 
+                                            hide_index=True, 
+                                            column_config=column_configuration
                                         )
 
-                                    with p_col2:
-                                        st.markdown(
-                                            f"<div class='page-info'>{st.session_state.current_page} / {total_pages}</div>", 
-                                            unsafe_allow_html=True
-                                        )
-                                    
-                                    with p_col3:
-                                        st.button(
-                                            "Sau ➡️", 
-                                            on_click=handle_page_change, 
-                                            args=(1,), 
-                                            disabled=(st.session_state.current_page >= total_pages),
-                                            use_container_width=True,
-                                            key="next_btn"
-                                        )
+                                # --- 🗑️ LOGIC XÓA TỐI ƯU (BATCH DELETE) ---
+                                if is_admin and not rows_to_delete.empty:
+                                    st.warning(f"⚠️ Đang chọn {len(rows_to_delete)} đơn để xóa.")
+                                    if st.button("🔥 XÁC NHẬN XÓA VĨNH VIỄN", type="primary", use_container_width=True):
+                                        try:
+                                            list_so_hd = rows_to_delete["Số HĐ"].tolist() 
+                                            
+                                            # TỐI ƯU: Xóa tất cả trong 1 lần gọi thay vì dùng vòng lặp for
+                                            supabase.table("cham_cong").delete().in_("so_hoa_don", list_so_hd).execute()                                                
+                                            
+                                            st.cache_data.clear() # Xóa cache để dữ liệu bảng cập nhật ngay
+                                            st.session_state.toast_message = "✅ Đã xóa các đơn được chọn thành công!"
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Lỗi khi xóa: {e}")
 
                                 # --- XỬ LÝ XUẤT FILE EXCEL ---
                                 out = io.BytesIO()
@@ -2076,13 +2016,8 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                 # Xử lý các cột số lượng
                                 df_export['Máy'] = df_export['combo'].fillna(0).astype(int) if 'combo' in df_export.columns else 0
-                                def fmt_km(x):
-                                    try:
-                                        return f"{int(float(x))} Km" if pd.notna(x) and float(x) > 0 else ""
-                                    except:
-                                        return ""
+                                df_export['Km_Số'] = df_export['Km'].apply(lambda x: f"{int(x)} Km" if x > 0 else "") if 'Km' in df_export.columns else ""
 
-                                df_export['Km_Số'] = df_export['Km'].apply(fmt_km)
                                 # Chuẩn bị Sheet chính
                                 df_main = df_export[['STT', 'Ngày', 'Địa chỉ', 'Tên', 'Máy', 'Km_Số', 'Thành tiền', 'Lý do', 'Trạng thái']]
                                 df_main.columns = ['STT', 'Ngày', 'Địa chỉ', 'Nhân viên', 'Số Máy', 'Km', 'Thành tiền', 'Ghi chú duyệt', 'Tình trạng']
@@ -2183,32 +2118,27 @@ elif menu == "📦 Giao hàng - Lắp đặt":
 
                                     ws.set_column(summary_start_col, summary_start_col, 25)
                                     ws.set_column(summary_start_col + 1, summary_start_col + 2, 15)
+
                                 # NÚT TẢI EXCEL
                                 with c_exp:
                                     # Căn chỉnh nút Export cho cân đối với chiều cao của các thẻ Metric
-                                    st.write("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)                                  
+                                    st.write("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True)                                  # Code xuất Excel của bạn giữ nguyên
                                     st.download_button(
-                                        
                                         label="📥 Tải Excel Báo Cáo", 
                                         data=out.getvalue(), 
                                         file_name=f"Bao_Cao_{current_user}.xlsx", 
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         use_container_width=True
-                                        
                                     )
             else:
                 st.info("📭 Chưa có dữ liệu đơn nào trong hệ thống.")
         except Exception as e:
             st.error(f"Lỗi tải dữ liệu: {e}")
 
-
         # --- 3. QUẢN LÝ ĐƠN HÀNG (SỬA/XÓA/HỦY) ---
-        # Lấy thông tin từ Cookie/Session
-        user_login = st.session_state.get("username"," ")
-        role_login = st.session_state.get("role")
 
         # --- DÀNH CHO USER & MANAGER: SỬA HOẶC XÓA ĐƠN CỦA CHÍNH MÌNH ---
-        if role_login in ["User", "Manager"]:
+        if current_r in ["User", "Manager"]:
             with st.expander("🛠️ Cập nhật thông tin đơn", expanded=False):
                 st.markdown("""
                 **📌 Hướng dẫn trạng thái đơn lắp đặt:**
@@ -2219,7 +2149,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                     
                 # 1. Lọc đơn và đảm bảo kiểu dữ liệu đồng nhất để tránh lỗi lọc
                 df_edit = df_all[
-                    (df_all["username"] == user_login) & 
+                    (df_all["username"] == current_u) & 
                     (df_all["Trạng thái"].isin(["Chờ duyệt", "Từ chối"]))
                 ].copy()
                 
@@ -2282,7 +2212,7 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                 supabase.table("cham_cong") \
                                     .delete() \
                                     .eq("id", row_id) \
-                                    .eq("username", user_login) \
+                                    .eq("username", current_u) \
                                     .eq("trang_thai", "Chờ duyệt") \
                                     .execute()
                                 
@@ -2305,10 +2235,13 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                         # 1. Hiển thị ảnh cũ (nếu có) bằng Popover ngay trong Form
                         if old_img_base64:
                             with st.popover("🖼️ Xem ảnh hóa đơn hiện tại", use_container_width=True):
-                                img_display = old_img_base64
-                                if isinstance(img_display, str) and not img_display.startswith("data:image"):
-                                    img_display = f"data:image/jpeg;base64,{img_display}"
-                                st.image(img_display, use_container_width=True)
+                                if st.button("Tải ảnh xem trước", key=f"load_img_{row_id}"):
+                                    res_img = supabase.table("cham_cong").select("hinh_anh").eq("id", row_id).execute()
+                                    if res_img.data:
+                                        img_data = res_img.data[0].get("hinh_anh")
+                                        if not img_data.startswith("data:image"):
+                                            img_data = f"data:image/jpeg;base64,{img_data}"
+                                        st.image(img_data, use_container_width=True)
 
                         # 2. Các trường nhập liệu (Bắt buộc nằm trong form để lấy giá trị khi submit)
                         n_uploaded_file = st.file_uploader("🆕 Thay ảnh hóa đơn mới (Để trống nếu giữ nguyên)", type=["jpg", "png", "jpeg"])
@@ -2330,30 +2263,33 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                             if not n_hd_in or not n_noi_dung:
                                 st.error("❌ Vui lòng điền đủ Số hóa đơn và Địa chỉ!")
                             else:
-                                # Logic tính toán đơn giá (Giữ nguyên logic của bạn)
-                                if n_quang_duong <= 50:
-                                    n_don_gia_km = 30000 if n_quang_duong < 20 else 50000 if n_quang_duong <= 30 else 70000 if n_quang_duong <= 40 else 80000
-                                else:
-                                    n_don_gia_km = 80000 + (n_quang_duong - 50) * 5000
                                 
-                                n_tong_tien = (n_may_lon * 200000) + (n_may_nho * n_don_gia_km)
+                                
+                                n_tong_tien = calculate_total_amount(n_quang_duong, n_may_lon, n_may_nho)
                                 n_tong_combo = n_may_lon + n_may_nho
                                 # Chuẩn hóa tiêu đề địa chỉ
                                 n_noi_dung_final = f"{n_noi_dung.title().strip()} | (Máy lớn: {n_may_lon}, Máy nhỏ: {n_may_nho})"
-                                
+
                                 try:
-                                    # Xử lý ảnh mới nếu có
                                     final_img_data = old_img_base64
+                                    
+                                    # Chỉ xử lý nếu có ảnh mới
                                     if n_uploaded_file:
                                         img_pil = Image.open(n_uploaded_file)
+                                        
+                                        # --- BƯỚC TỐI ƯU THÊM: RESIZE ---
+                                        max_size = (1024, 1024)
+                                        img_pil.thumbnail(max_size, Image.Resampling.LANCZOS)
+                                        
                                         if img_pil.mode in ("RGBA", "P"): 
                                             img_pil = img_pil.convert("RGB")
                                         
                                         img_byte_arr = io.BytesIO()
+                                        # Nén JPEG 70% là mức hợp lý để cân bằng giữa chất lượng và dung lượng
                                         img_pil.save(img_byte_arr, format='JPEG', quality=70, optimize=True)
                                         final_img_data = base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
 
-                                    # Payload cập nhật
+                                    # Payload cập nhật (chỉ gửi ảnh nếu nó thay đổi hoặc cần thiết)
                                     update_payload = {
                                         "so_hoa_don": n_hd_in.upper().strip(),
                                         "noi_dung": n_noi_dung_final,
@@ -2362,20 +2298,21 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                         "thanh_tien": float(n_tong_tien),
                                         "hinh_anh": final_img_data,
                                         "trang_thai": 'Chờ duyệt',
-                                        "thoi_gian": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                        "ghi_chu_duyet": '' # Xóa lý do từ chối cũ khi gửi lại
+                                        "thoi_gian": datetime.now().isoformat(), # Dùng isoformat thay vì định dạng thủ công
+                                        "ghi_chu_duyet": '' 
                                     }
 
-                                    # LƯU Ý: Dùng user_login (biến bạn đã lấy từ session ở đoạn code trước)
                                     supabase.table("cham_cong") \
                                         .update(update_payload) \
                                         .eq("id", row_id) \
-                                        .eq("username", user_login) \
+                                        .eq("username", current_u) \
                                         .execute()
                                     
-                                    st.session_state.toast_message = "✅ Đã cập nhật và gửi duyệt lại!"
+                                    # Làm mới Cache để bảng dữ liệu cập nhật ngay lập tức
+                                    st.cache_data.clear()
+                                    st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                                     st.rerun()
-                                    
+                                                                    
                                 except Exception as e:
                                     st.error(f"❌ Lỗi hệ thống: {e}")
 
@@ -2443,7 +2380,8 @@ elif menu == "📦 Giao hàng - Lắp đặt":
                                     }) \
                                     .eq("id", row_id_undo) \
                                     .execute()
-                                
+                                st.cache_data.clear()
+                                st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                                 st.session_state.toast_message = "✅ Đã chuyển đơn về trạng thái Chờ duyệt thành công!"
                                 st.rerun()
                             except Exception as e:
@@ -2601,7 +2539,8 @@ elif menu == "⚙️ Quản trị hệ thống":
                                             .update(update_data) \
                                             .eq("username", target_u) \
                                             .execute()
-                                        
+                                        st.cache_data.clear()
+                                        st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                                         st.success(f"✅ Đã cập nhật thành công nhân sự: {final_name}")
                                         
                                         # Kiểm tra nếu admin đang tự sửa chính mình
@@ -2846,7 +2785,8 @@ elif menu == "⚙️ Quản trị hệ thống":
                                         .update({"password": pw_new_hashed}) \
                                         .eq("username", current_user) \
                                         .execute()
-                                    
+                                    st.cache_data.clear()
+                                    st.session_state.reset_trigger = st.session_state.get('reset_trigger', 0) + 1
                                     st.success("✅ Đổi mật khẩu thành công!")
                                     st.balloons()
                                     

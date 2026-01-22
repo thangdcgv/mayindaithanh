@@ -14,6 +14,7 @@ from streamlit_local_storage import LocalStorage
 import calendar 
 import pytz
 import warnings
+from sqlalchemy import text
 
 # Tắt cảnh báo không cần thiết
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -60,7 +61,6 @@ supabase = get_supabase()
 # Hàm băm mật khẩu
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
-from sqlalchemy import text
 
 def fast_import_data(df, table_name, if_exists='append'):
     """

@@ -549,36 +549,36 @@ elif menu == "⚙️ Quản trị hệ thống":
             st.warning("Bạn không có quyền truy cập khu vực này.")
         else:
             with st.expander("📥 Import dữ liệu cũ (Excel/CSV)"):
-            st.info("💡 Tính năng này dùng kết nối trực tiếp (Direct Query) giúp nạp hàng ngàn dòng dữ liệu chỉ trong vài giây.")
-            
-            # 1. Upload File
-            uploaded_file = st.file_uploader("Chọn file Excel dữ liệu cũ", type=['xlsx', 'xls', 'csv'])
-            
-            # 2. Chọn bảng cần import
-            target_table = st.selectbox("Chọn bảng đích", ["cham_cong", "cham_cong_di_lam", "dang_ky_nghi"])
-            
-            if uploaded_file:
-                # Đọc file vào DataFrame
-                if uploaded_file.name.endswith('.csv'):
-                    df_import = pd.read_csv(uploaded_file)
-                else:
-                    df_import = pd.read_excel(uploaded_file)
-                    
-                st.write("Xem trước 5 dòng dữ liệu:", df_import.head())
+                st.info("💡 Tính năng này dùng kết nối trực tiếp (Direct Query) giúp nạp hàng ngàn dòng dữ liệu chỉ trong vài giây.")
                 
-                # Nút xác nhận
-                if st.button("🚀 BẮT ĐẦU IMPORT", type="primary"):
-                    with st.spinner("Đang đẩy dữ liệu vào Database..."):
-                        # Gọi hàm import nhanh
-                        success, msg = fast_import_data(df_import, target_table)
+                # 1. Upload File
+                uploaded_file = st.file_uploader("Chọn file Excel dữ liệu cũ", type=['xlsx', 'xls', 'csv'])
+                
+                # 2. Chọn bảng cần import
+                target_table = st.selectbox("Chọn bảng đích", ["cham_cong", "cham_cong_di_lam", "dang_ky_nghi"])
+                
+                if uploaded_file:
+                    # Đọc file vào DataFrame
+                    if uploaded_file.name.endswith('.csv'):
+                        df_import = pd.read_csv(uploaded_file)
+                    else:
+                        df_import = pd.read_excel(uploaded_file)
                         
-                        if success:
-                            st.success(msg)
-                            st.balloons()
-                        else:
-                            st.error(msg)
-            # Load danh sách user
-            users = supabase.table("quan_tri_vien").select("username, ho_ten, role, chuc_danh").execute()
-            if users.data:
-                st.dataframe(users.data, use_container_width=True)
-                st.info("Liên hệ System Admin để thêm/xóa nhân sự.")
+                    st.write("Xem trước 5 dòng dữ liệu:", df_import.head())
+                    
+                    # Nút xác nhận
+                    if st.button("🚀 BẮT ĐẦU IMPORT", type="primary"):
+                        with st.spinner("Đang đẩy dữ liệu vào Database..."):
+                            # Gọi hàm import nhanh
+                            success, msg = fast_import_data(df_import, target_table)
+                            
+                            if success:
+                                st.success(msg)
+                                st.balloons()
+                            else:
+                                st.error(msg)
+                # Load danh sách user
+                users = supabase.table("quan_tri_vien").select("username, ho_ten, role, chuc_danh").execute()
+                if users.data:
+                    st.dataframe(users.data, use_container_width=True)
+                    st.info("Liên hệ System Admin để thêm/xóa nhân sự.")

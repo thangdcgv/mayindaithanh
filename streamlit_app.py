@@ -18,13 +18,6 @@ from sqlalchemy import create_engine
 
 # Tắt cảnh báo không cần thiết
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-# Cấu hình trang (Phải đặt đầu tiên)
-st.set_page_config(
-    page_title="Đại Thành - Ứng Dụng Nội Bộ",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 def get_secret(path: list, label: str):
     """
     path: ["SUPABASE_URL"] hoặc ["connections", "supabase_sql", "host"]

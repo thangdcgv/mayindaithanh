@@ -20,17 +20,23 @@ from sqlalchemy import create_engine
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 def get_secret(path: list, label: str):
     """
-    path: ["SUPABASE_URL"] hoặc ["connections", "supabase_sql", "host"]
+    path: ["SUPABASE_URL"]
     label: tên hiển thị khi báo lỗi
     """
     try:
-        val = st.secrets
-        for p in path:
-            val = val[p]
+        # Hugging Face chỉ hỗ trợ ENV VAR phẳng
+        if len(path) != 1:
+            raise KeyError
+
+        val = os.getenv(path[0])
+        if not val:
+            raise KeyError
+
         return val
+
     except Exception:
         st.error(f"❌ Thiếu cấu hình hệ thống: `{label}`")
-        st.info("👉 Vui lòng kiểm tra file `.streamlit/secrets.toml`")
+        st.info("👉 Vui lòng kiểm tra **Variables and secrets** trong Hugging Face Spaces")
         st.stop()
 SUPABASE_URL = get_secret(["SUPABASE_URL"], "SUPABASE_URL")
 SUPABASE_KEY = get_secret(["SUPABASE_KEY"], "SUPABASE_KEY")
@@ -39,8 +45,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 REQUIRED_SECRETS = [
     (["SUPABASE_URL"], "SUPABASE_URL"),
     (["SUPABASE_KEY"], "SUPABASE_KEY"),
-    (["COOKIE_PASSWORD"], "COOKIE_PASSWORD"),
-    (["connections", "supabase_sql"], "connections.supabase_sql")
+    (["COOKIE_PASSWORD"], "COOKIE_PASSWORD")
 ]
 
 for path, label in REQUIRED_SECRETS:
